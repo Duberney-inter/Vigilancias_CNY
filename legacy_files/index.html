@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <base target="_top">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>CCG Vigilancias bachillerato</title>
+
+    <?!= include('frontend/styles'); ?>
+
+</head>
+
+<body>
+
+    <!-- TOGGLE CERRAR SESIÓN - ESQUINA SUPERIOR DERECHA -->
+    <div id="logoutToggle" class="logout-toggle hidden" onclick="confirmLogout()">
+        <i class="fas fa-sign-out-alt"></i>
+    </div>
+
+    <!-- HEADER CON LOGO -->
+    <div class="header-container">
+        <img src="https://colegiomayordelosandes.edu.co/landing/img/logo.png" class="logo-img">
+        <div class="header-title">SISTEMA DE CONTROL DE VIGILANCIAS PREESCOLAR</div>
+    </div>
+    <div id="offline-indicator" class="hidden"
+        style="background:#F39C12; color:white; padding:8px; text-align:center; font-size:13px; font-weight:bold; cursor:pointer;"
+        onclick="sincronizarCola()">
+        📡 Pendientes: <span id="offline-count">0</span> (Click para sincronizar)
+    </div>
+
+    <!-- TARJETA DE LOGIN -->
+    <div id="view-login" class="login-card">
+        <h3 style="color: var(--color-green-primary); margin-top: 0;">Acceso Seguro</h3>
+        <input type="text" id="user" placeholder="Documento / Email" style="text-align: center;">
+        <input type="password" id="pass" placeholder="Contraseña" style="text-align: center;">
+        <button class="btn btn-green" onclick="login()">Ingresar</button>
+        <a href="https://wa.me/573506224730" style="font-size: 12px; color: var(--text-light);">¿Olvidó su
+            contraseña?</a>
+    </div>
+
+    <!-- DASHBOARD (PERFIL) -->
+    <div id="view-dash" class="card hidden">
+        <!-- Contenedor de la foto (se llena dinámicamente) -->
+        <div id="foto-container" style="text-align: center; margin-bottom: 10px;"></div>
+        <h3 id="p-nombre" style="margin: 10px 0 5px;"></h3>
+        <span id="p-rol" class="badge"></span>
+        <p id="p-grupo" style="font-size: 12px; color: var(--text-light); margin-bottom: 20px;"></p>
+        <div id="menu-area"></div>
+    </div>
+
+    <!-- ESCANER QR -->
+    <div id="view-scan" class="card hidden">
+        <h3 style="color: var(--color-green-primary);">Escanear QR</h3>
+        <div id="gps-accuracy" class="gps-status hidden"></div>
+        <div id="reader"></div>
+        <button class="btn btn-red" onclick="stopScan()">Cancelar</button>
+    </div>
+
+    <a href="https://wa.me/573506224730" class="whatsapp"><i class="fab fa-whatsapp"></i></a>
+
+    <!-- External Libraries -->
+    <script src="https://cdn.jsdelivr.net/npm/sweetalert2@11"></script>
+    <script src="https://unpkg.com/html5-qrcode" type="text/javascript"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@400;600;700&display=swap" rel="stylesheet">
+
+    <?!= include('frontend/js'); ?>
+
+</body>
+
+</html>

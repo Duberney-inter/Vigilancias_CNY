@@ -1,0 +1,44 @@
+{
+  "name": "app-vigilancia-cny",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:all": "concurrently \"npm run dev\" \"npm run api:local\"",
+    "dev:fresh": "node -e \"import('fs').then(fs=>fs.promises.rm('local_pgdata',{recursive:true,force:true}).then(()=>console.log('local_pgdata eliminada')))\" && concurrently \"npm run dev\" \"npm run api:local\"",
+    "api:local": "node scripts/local-server.js",
+    "build": "vite build",
+    "lint": "eslint .",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "@neondatabase/serverless": "^0.10.4",
+    "@vercel/blob": "^0.27.1",
+    "chart.js": "^4.5.1",
+    "crypto-js": "^4.2.0",
+    "html-to-image": "^1.11.13",
+    "html5-qrcode": "^2.3.8",
+    "jsonwebtoken": "^9.0.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.8",
+    "lucide-react": "^0.475.0",
+    "nodemailer": "^8.0.7",
+    "qrcode.react": "^4.2.0",
+    "react": "^19.0.0",
+    "react-chartjs-2": "^5.3.1",
+    "react-dom": "^19.0.0",
+    "react-router-dom": "^7.13.1",
+    "sweetalert2": "^11.17.2",
+    "xlsx": "^0.18.5"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.4.5",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.2.1",
+    "cors": "^2.8.6",
+    "dotenv": "^17.4.2",
+    "express": "^5.2.1",
+    "vite": "^6.1.0"
+  }
+}

@@ -1,0 +1,1651 @@
+<script>
+  let currentUser = null;
+  let html5QrcodeScanner = null;
+  let todosUsuariosNotificaciones = [];
+
+  // Variables globales para GPS
+  let userLat = null;
+  let userLon = null;
+  const DISTANCIA_MAXIMA = 50;
+
+  // Asegurar que el toggle esté oculto al cargar la página
+  document.addEventListener('DOMContentLoaded', function () {
+    document.getElementById('logoutToggle').classList.add('hidden');
+    verificarSesionActiva(); // Verificar al cargar
+    iniciarGPS(); // Iniciar GPS automáticamente (reengineered)
+    verificarConexionServidor(); // Fix Multi-cuenta
+  });
+
+  // Verificar sesión cada minuto (60000 ms)
+  setInterval(verificarSesionActiva, 60000);
+
+  function verificarSesionActiva() {
+    const stored = localStorage.getItem('usuario_ccg_2026');
+    if (stored) {
+      try {
+        const objeto = JSON.parse(stored);
+        // Compatibilidad con versiones anteriores (si solo guardaba usuario)
+        // Si no tiene 'entrada', asumimos que es viejo y reseteamos o lo dejamos pasar (mejor resetear para seguridad)
+        if (!objeto.entrada || !objeto.datos) {
+          console.warn("Formato de sesión antiguo. Cerrando sesión...");
+          logout();
+          return;
+        }
+
+        const ahora = new Date().getTime();
+        const horasTranscurridas = (ahora - objeto.entrada) / (1000 * 60 * 60);
+
+        if (horasTranscurridas > 8) {
+          logout();
+          Swal.fire({
+            title: 'Sesión Expirada',
+            text: 'Tu sesión de 8 horas ha expirado. Por favor ingresa nuevamente.',
+            icon: 'warning',
+            confirmButtonText: 'Entendido'
+          });
+        } else {
+          // Sesión válida, restaurar currentUser si es nulo (recarga de página)
+          if (!currentUser) {
+            currentUser = objeto.datos;
+            renderDash();
+          }
+        }
+      } catch (e) {
+        console.error("Error al leer sesión:", e);
+        logout();
+      }
+    }
+    // Si no hay storage, el usuario se queda en login (estado inicial)
+  }
+
+  /* --- FUNCIÓN DE LOGOUT --- */
+  function logout() {
+    currentUser = null;
+    localStorage.removeItem('usuario_ccg_2026');
+    document.getElementById('view-dash').classList.add('hidden');
+    document.getElementById('view-scan').classList.add('hidden');
+    document.getElementById('logoutToggle').classList.add('hidden');
+    document.getElementById('view-login').classList.remove('hidden');
+    // Limpiar campos
+    document.getElementById('pass').value = '';
+    if (html5QrcodeScanner) { detenerCamara(); }
+  }
+
+  // === 2. FIX MÚLTIPLES CUENTAS ===
+  function verificarConexionServidor() {
+    try {
+      google.script.run
+        .withFailureHandler(function (err) {
+          console.error("Error de sesión:", err);
+          if (typeof M !== 'undefined') M.toast({ html: '⚠️ Error de sesión de Google. Si no carga datos, prueba en Modo Incógnito.', displayLength: 6000 });
+        })
+        .withSuccessHandler(function () {
+          console.log("Conexión con servidor exitosa.");
+        })
+        .obtenerUsuarioActual();
+    } catch (e) {
+      console.error(e);
+    }
+  }
+
+  /* --- FUNCIÓN DE CONFIRMACIÓN PARA CERRAR SESIÓN --- */
+  function confirmLogout() {
+    Swal.fire({
+      title: '¿Cerrar Sesión?',
+      html: `<div style="text-align: center; padding: 10px;">
+              <i class="fas fa-sign-out-alt" style="font-size: 40px; color: var(--color-red-primary); margin-bottom: 15px;"></i>
+              <p>¿Estás seguro de que deseas salir del sistema?</p>
+              <small style="color: var(--text-light); display: block; margin-top: 10px;">
+                <i class="fas fa-user"></i> ${currentUser.nombre}
+              </small>
+            </div>`,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: 'Sí, Salir',
+      cancelButtonText: 'Cancelar',
+      confirmButtonColor: 'var(--color-red-primary)',
+      cancelButtonColor: 'var(--color-gray-primary)',
+      customClass: {
+        popup: 'swal2-popup',
+        confirmButton: 'swal2-confirm',
+        cancelButton: 'swal2-cancel'
+      }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        logout();
+        Swal.fire('Sesión Cerrada', 'Has salido exitosamente.', 'success');
+      }
+    });
+  }
+
+  function login() {
+    const u = document.getElementById('user').value;
+    const p = document.getElementById('pass').value;
+    if (!u || !p) return Swal.fire('Error', 'Datos incompletos', 'warning');
+
+    Swal.fire({ title: 'Validando Credenciales...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+
+    google.script.run.withSuccessHandler(res => {
+      if (res.status === 'ok') {
+        currentUser = res.usuario;
+
+        // Guardar sesión con fecha de entrada
+        const sessionData = {
+          datos: currentUser,
+          entrada: new Date().getTime()
+        };
+        localStorage.setItem('usuario_ccg_2026', JSON.stringify(sessionData));
+
+        Swal.fire({
+          icon: 'success',
+          title: `¡Bienvenido ${currentUser.nombre}!`,
+          html: `<b>Rol:</b> ${currentUser.rol}<br><b>Área:</b> ${currentUser.grupo || ''}`,
+          timer: 2000, showConfirmButton: false
+        }).then(() => renderDash());
+      } else {
+        Swal.fire('Error', res.msg, 'error');
+      }
+    }).validarUsuario(u, p, navigator.userAgent);
+  }
+
+  function renderDash() {
+    document.getElementById('view-login').classList.add('hidden');
+    document.getElementById('view-dash').classList.remove('hidden');
+    document.getElementById('logoutToggle').classList.remove('hidden');
+
+    document.getElementById('p-nombre').innerText = currentUser.nombre;
+    document.getElementById('p-rol').innerText = currentUser.rol;
+    document.getElementById('p-grupo').innerText = currentUser.grupo || '';
+
+    // ----- FOTO DE PERFIL -----
+    const fotoContainer = document.getElementById('foto-container');
+    if (currentUser.foto &&
+      currentUser.foto.trim() !== '' &&
+      !currentUser.foto.includes('placeholder') &&
+      !currentUser.foto.includes('dicebear')) {
+      fotoContainer.innerHTML = `<img src="${currentUser.foto}" class="profile-img" onerror="this.onerror=null; this.src='https://via.placeholder.com/100?text=Error';">`;
+    } else {
+      // Placeholder genérico (icono de usuario)
+      fotoContainer.innerHTML = `<div class="profile-placeholder">
+                                   <i class="fas fa-user fa-4x" style="color:white;"></i>
+                                 </div>`;
+    }
+
+    const menu = document.getElementById('menu-area');
+    menu.innerHTML = '';
+    const rol = currentUser.rol;
+
+    if (rol === 'ADMINISTRADOR GENERAL') {
+      addBtn(menu, 'Dashboard KPIs', 'chart-line', 'btn-purple', mostrarKPIsAdministrador);
+      addBtn(menu, '📢 Enviar Comunicado', 'bullhorn', 'btn-orange', openNotifModal); // NUEVO BOTÓN
+      addBtn(menu, 'Configuración', 'cogs', 'btn-dark', abrirModuloConfiguracion);
+      addBtn(menu, 'Gestión Usuarios', 'users', 'btn-dark', () => loadTableData('users', ['ID', 'Nombre', 'Email', 'Rol', 'Grupo']));
+      addBtn(menu, 'Auditoría Logs', 'list', 'btn-dark', () => loadTableData('logs', ['Fecha', 'Hora', 'Usuario', 'Tipo', 'Detalle']));
+      // Botones de avatares eliminados
+      addBtn(menu, 'Backup', 'database', 'btn-green', () => runBackup());
+    }
+
+    if (rol === 'DIRECTOR PREESCOLAR') {
+      addBtn(menu, 'Dashboard KPIs', 'chart-line', 'btn-purple', mostrarKPIsDirector);
+      addBtn(menu, 'Supervisión Vivo', 'eye', 'btn-green', () => loadDirectorDataWithLoading('vivo'));
+      addBtn(menu, 'Reportes', 'chart-bar', 'btn-dark', () => Swal.fire('Reportes', 'Generando PDF...', 'info'));
+      addBtn(menu, 'Novedades', 'bell', 'btn-orange', () => loadTableData('novedades', ['Fecha', 'Usuario', 'Detalle']));
+      addBtn(menu, 'Historial General', 'history', 'btn-dark', () => loadTableData('historial_general', ['Fecha', 'Usuario', 'Tipo', 'Detalle']));
+      addBtn(menu, 'Notificaciones', 'paper-plane', 'btn-purple', openNotifModal);
+    }
+
+    if (rol === 'JEFE DE AREA') {
+      addBtn(menu, 'Dashboard', 'chart-pie', 'btn-dark', () => loadJefeData('dashboard'));
+      addBtn(menu, 'Escanear QR', 'qrcode', 'btn-green', startScan);
+      const manualContainerJefe = document.createElement('div');
+      manualContainerJefe.className = 'manual-container';
+      manualContainerJefe.innerHTML = getManualHtml();
+      menu.appendChild(manualContainerJefe);
+      addBtn(menu, 'Registrar Novedad', 'camera', 'btn-orange', reportarNov);
+      addBtn(menu, 'Registros Área', 'list-alt', 'btn-green', () => loadJefeData('registros'));
+      addBtn(menu, 'Equipo', 'users', 'btn-purple', () => loadJefeData('equipo'));
+      addBtn(menu, 'Mis Turnos', 'calendar', 'btn-dark', () => loadDocenteDataWithLoading('turnos'));
+      addBtn(menu, 'Mi Historial', 'history', 'btn-dark', () => loadDocenteDataWithLoading('historial'));
+    }
+
+    if (rol === 'DOCENTE') {
+      addBtn(menu, 'Escanear QR', 'qrcode', 'btn-green', startScan);
+      const manualContainerDocente = document.createElement('div');
+      manualContainerDocente.className = 'manual-container';
+      manualContainerDocente.innerHTML = getManualHtml();
+      menu.appendChild(manualContainerDocente);
+      addBtn(menu, 'Mis Turnos', 'calendar', 'btn-dark', () => loadDocenteDataWithLoading('turnos'));
+      addBtn(menu, 'Mi Historial', 'history', 'btn-dark', () => loadDocenteDataWithLoading('historial'));
+      addBtn(menu, 'Reportar Novedad', 'exclamation-circle', 'btn-orange', reportarNov);
+    }
+
+    if (rol === 'ASISTENTE') {
+      addBtn(menu, 'Registros Generales', 'search', 'btn-dark', () => loadAsistenteDataWithLoading('busqueda'));
+      addBtn(menu, 'Ver Novedades', 'images', 'btn-orange', () => loadAsistenteDataWithLoading('novedades_visual'));
+      addBtn(menu, 'Exportar', 'file-csv', 'btn-green', () => loadAsistenteData('exportar'));
+      addBtn(menu, 'Reemplazos', 'exchange-alt', 'btn-purple', openReemplazoModalWithLoading);
+    }
+  }
+
+  /* --- FUNCIONES CON CARGA MEJORADA --- */
+  function loadDirectorDataWithLoading(type) {
+    Swal.fire({ title: 'Cargando...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); setTimeout(() => { loadDirectorData(type); }, 100); } });
+  }
+  function loadDocenteDataWithLoading(type) {
+    Swal.fire({ title: 'Cargando...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); setTimeout(() => { loadDocenteData(type); }, 100); } });
+  }
+  function loadAsistenteDataWithLoading(type) {
+    Swal.fire({ title: 'Cargando...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); setTimeout(() => { loadAsistenteData(type); }, 100); } });
+  }
+  function openReemplazoModalWithLoading() {
+    Swal.fire({ title: 'Cargando...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); setTimeout(() => { openReemplazoModal(); }, 100); } });
+  }
+
+  /* --- LOGICA DE DATOS REALES --- */
+  function loadTableData(type, headers) {
+    Swal.fire({ title: 'Cargando...', didOpen: () => Swal.showLoading() });
+    const func = currentUser.rol === 'ADMINISTRADOR GENERAL' ? 'getAdminData' : 'getDirectorData';
+    google.script.run.withSuccessHandler(data => {
+      Swal.close();
+      renderTable(type, headers, data);
+    })[func](type);
+  }
+
+  function loadJefeData(type) {
+    Swal.fire({ title: 'Cargando...', didOpen: () => Swal.showLoading() });
+    google.script.run.withSuccessHandler(data => {
+      Swal.close();
+      if (type === 'dashboard') Swal.fire('Dashboard', `Total: ${data.total}<br>Novedades: ${data.novedades}<br>Asist: ${data.asistencia}`, 'info');
+      if (type === 'equipo') {
+        let html = data.map(u => `<div style="display:inline-block; margin:5px; text-align:center;"><img src="${u.foto}" style="width:50px;height:50px;border-radius:50%"><br><small>${u.nombre}</small></div>`).join('');
+        Swal.fire({ title: 'Equipo', html: html });
+      }
+      if (type === 'registros') renderTable('Registros', ['Fecha', 'Hora', 'Usuario', 'Detalle'], data);
+    }).getJefeData(type, currentUser.grupo);
+  }
+
+  function loadAsistenteData(type) {
+    google.script.run.withSuccessHandler(data => {
+      Swal.close();
+      if (type === 'busqueda') renderTable('Registros', ['Fecha', 'Usuario', 'Detalle'], data);
+      if (type === 'novedades_visual') {
+        let html = data.map(r => `<img src="${r.foto}" style="width:100%;border-radius:10px;max-height:200px;object-fit:cover;"><p><b>${r.nombre}</b><br>${r.detalle}</p><hr>`).join('');
+        Swal.fire({ title: 'Novedades', html: html || 'Sin fotos' });
+      }
+      if (type === 'exportar') {
+        let blob = new Blob([data], { type: 'text/csv' });
+        let link = document.createElement('a');
+        link.href = window.URL.createObjectURL(blob);
+        link.download = 'export.csv';
+        link.click();
+      }
+    }).getAsistenteData(type);
+  }
+
+  function loadDirectorData(type) {
+    if (type === 'vivo') {
+      google.script.run.withSuccessHandler(data => {
+        Swal.close();
+        let html = data.map(r => `<div><b>${r.nombre}</b><br>${r.zona} (${r.hora})</div><hr>`).join('');
+        Swal.fire({ title: 'En Vivo (Hoy)', html: `<div class="table-container">${html}</div>` });
+      }).getDirectorData(type);
+    } else {
+      loadTableData(type, ['Fecha', 'Usuario', 'Detalle']);
+    }
+  }
+
+  function loadDocenteData(type) {
+    if (type === 'turnos') {
+      google.script.run.withSuccessHandler(data => {
+        Swal.close();
+        if (data.length === 0) return Swal.fire('Info', 'No tienes turnos asignados', 'info');
+        let html = `<div style="max-height:300px; overflow-y:auto; padding:5px;">`;
+        data.forEach(t => {
+          html += `
+            <div class="turno-card">
+              <div class="turno-row"><b>ZONA:</b> ${t.zona} 📍</div>
+              <div class="turno-row"><b>FECHA:</b> ${t.fecha} 📆</div>
+              <div class="turno-row"><b>HORA:</b> ${t.hora} ⏰</div>
+              <div class="turno-row" style="font-size:12px; margin-top:5px;">${t.actividad || 'Vigilancia'}</div>
+            </div>`;
+        });
+        html += `</div>`;
+        Swal.fire({ title: 'Mis Turnos', html: html, width: '400px' });
+      }).getDocenteData('turnos', currentUser.id);
+    }
+    if (type === 'historial') {
+      google.script.run.withSuccessHandler(data => {
+        Swal.close();
+        renderTable('Mi Historial', ['Fecha', 'Hora', 'Tipo', 'Detalle'], data);
+      }).getDocenteData('historial', currentUser.id);
+    }
+  }
+
+  /* --- AUXILIARES - FUNCIÓN RENDERTABLE MEJORADA --- */
+  function renderTable(title, headers, data) {
+    let th = headers.map(h => `<th>${h}</th>`).join('');
+    let tr = data.map(row => `<tr>${row.map(c => `<td>${c || ''}</td>`).join('')}</tr>`).join('');
+
+    Swal.fire({
+      title: title,
+      html: `<div class="table-container" style="width: 100%;">
+              <table class="mini-table">
+                <thead><tr>${th}</tr></thead>
+                <tbody>${tr}</tbody>
+              </table>
+            </div>`,
+      width: '95%',
+      customClass: {
+        popup: 'swal2-popup',
+        title: 'swal2-title',
+        htmlContainer: 'swal2-html-container'
+      },
+      showConfirmButton: true,
+      confirmButtonText: 'Cerrar',
+      heightAuto: false,
+      didOpen: () => {
+        const container = document.querySelector('.table-container');
+        if (container) {
+          container.style.maxHeight = '60vh';
+          container.style.overflow = 'auto';
+        }
+      }
+    });
+  }
+
+  function reportarNov() {
+    Swal.fire({
+      title: 'Reportar Novedad',
+      html: `<div style="text-align:center;">
+               <textarea id="nt" class="swal2-textarea" placeholder="Descripción de la novedad..." style="width:100%; min-height:80px; margin:10px 0;"></textarea>
+               <input type="file" id="nf" class="swal2-file" accept="image/*,.pdf" style="font-size:12px; padding:8px;">
+               <small style="color:#666; font-size:11px; display:block; margin-top:5px;">Opcional: subir foto o documento</small>
+             </div>`,
+      showCancelButton: true,
+      confirmButtonText: 'Enviar',
+      cancelButtonText: 'Cancelar',
+      width: '400px',
+      customClass: {
+        popup: 'swal2-popup',
+        input: 'swal2-input',
+        textarea: 'swal2-textarea',
+        file: 'swal2-file'
+      },
+      preConfirm: () => {
+        const t = document.getElementById('nt').value;
+        const f = document.getElementById('nf').files[0];
+        if (!t) return Swal.showValidationMessage('Falta la descripción de la novedad');
+        if (f) {
+          return new Promise(resolve => {
+            const r = new FileReader();
+            r.onload = e => resolve({ txt: t, b64: e.target.result, nom: f.name });
+            r.readAsDataURL(f);
+          });
+        }
+        return { txt: t, b64: null, nom: null };
+      }
+    }).then(res => {
+      if (res.isConfirmed) {
+        Swal.fire({ title: 'Subiendo novedad...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+        google.script.run.withSuccessHandler(() => {
+          Swal.fire('¡Listo!', 'Novedad reportada correctamente', 'success');
+        }).guardarNovedad(currentUser, res.value.txt, res.value.b64, res.value.nom, null);
+      }
+    });
+  }
+
+  function runBackup() {
+    Swal.fire({ title: 'Procesando...', didOpen: () => Swal.showLoading() });
+    google.script.run.withSuccessHandler(r => Swal.fire('Backup', r.msg, 'success')).getAdminData('backup');
+  }
+
+  /* === NUEVAS FUNCIONES PARA KPIs === */
+  function mostrarKPIsAdministrador() {
+    Swal.fire({ title: '📊 Cargando Dashboard...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    google.script.run.withSuccessHandler(function (resultado) {
+      Swal.close();
+      if (resultado.status === 'ok') {
+        var kpis = resultado.kpis;
+        var html = `
+          <div style="text-align: left; max-height: 70vh; overflow-y: auto;">
+            <div style="margin-bottom: 25px;">
+              <h3 style="color: var(--color-blue-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-chart-line"></i> ESTADÍSTICAS GENERALES
+              </h3>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; margin-top: 15px;">
+                <div style="background: linear-gradient(135deg, #4A6FA5, #5A7FB5); color: white; padding: 15px; border-radius: 10px; text-align: center;">
+                  <div style="font-size: 28px; font-weight: bold;">${kpis.generales.totalUsuarios}</div>
+                  <div style="font-size: 12px;">Usuarios Totales</div>
+                </div>
+                <div style="background: linear-gradient(135deg, #6AB04C, #7BCF5A); color: white; padding: 15px; border-radius: 10px; text-align: center;">
+                  <div style="font-size: 28px; font-weight: bold;">${kpis.generales.totalZonas}</div>
+                  <div style="font-size: 12px;">Zonas Activas</div>
+                </div>
+                <div style="background: linear-gradient(135deg, #F39C12, #F5B041); color: white; padding: 15px; border-radius: 10px; text-align: center;">
+                  <div style="font-size: 28px; font-weight: bold;">${kpis.generales.registrosHoy}</div>
+                  <div style="font-size: 12px;">Registros Hoy</div>
+                </div>
+                <div style="background: linear-gradient(135deg, #E74C3C, #EC7063); color: white; padding: 15px; border-radius: 10px; text-align: center;">
+                  <div style="font-size: 28px; font-weight: bold;">${kpis.generales.novedadesHoy}</div>
+                  <div style="font-size: 12px;">Novedades Hoy</div>
+                </div>
+              </div>
+            </div>
+            <div style="margin-bottom: 25px;">
+              <h3 style="color: var(--color-blue-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-calendar-week"></i> ESTADÍSTICAS DE LA SEMANA
+              </h3>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 15px;">
+                <div style="background: var(--bg-light); padding: 15px; border-radius: 10px;">
+                  <h4 style="margin-top: 0; color: var(--color-green-dark);">📈 Actividad</h4>
+                  <p><i class="fas fa-check-circle" style="color: var(--color-green-primary);"></i> Registros: <strong>${kpis.semana.registrosSemana}</strong></p>
+                  <p><i class="fas fa-exclamation-triangle" style="color: var(--color-orange-primary);"></i> Novedades: <strong>${kpis.semana.novedadesSemana}</strong></p>
+                  <p><i class="fas fa-chart-bar" style="color: var(--color-blue-primary);"></i> Promedio diario: <strong>${kpis.semana.promedioDiario}</strong></p>
+                </div>
+                <div style="background: var(--bg-light); padding: 15px; border-radius: 10px;">
+                  <h4 style="margin-top: 0; color: var(--color-green-dark);">👥 Participación</h4>
+                  <p><i class="fas fa-users" style="color: var(--color-purple-primary);"></i> Usuarios activos: <strong>${kpis.semana.usuariosSemana || 0}</strong></p>
+                  <p><i class="fas fa-user-check" style="color: var(--color-green-primary);"></i> Tasa actividad hoy: <strong>${kpis.generales.tasaActividad}</strong></p>
+                </div>
+              </div>
+            </div>
+            ${kpis.distribucion.zonasTop.length > 0 ? `
+            <div style="margin-bottom: 25px;">
+              <h3 style="color: var(--color-blue-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-map-marker-alt"></i> ZONAS MÁS ACTIVAS
+              </h3>
+              <div style="background: var(--bg-light); padding: 15px; border-radius: 10px; margin-top: 15px;">
+                ${kpis.distribucion.zonasTop.map((zona, index) => `
+                  <div style="margin-bottom: 10px; padding: 10px; background: white; border-radius: 8px; border-left: 4px solid ${index === 0 ? '#F39C12' : index === 1 ? '#95A5A6' : '#BDC3C7'};">
+                    <div style="display: flex; justify-content: space-between;">
+                      <span><strong>${zona.zona}</strong></span>
+                      <span style="color: ${index === 0 ? '#F39C12' : '#7F8C8D'};">${zona.count} registros</span>
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+            ` : ''}
+            <div style="margin-bottom: 25px;">
+              <h3 style="color: var(--color-blue-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-clock"></i> HORARIO DE MAYOR ACTIVIDAD
+              </h3>
+              <div style="text-align: center; padding: 20px; background: linear-gradient(135deg, var(--color-blue-primary), var(--color-blue-light)); color: white; border-radius: 10px; margin-top: 15px;">
+                <div style="font-size: 48px; font-weight: bold;">${kpis.distribucion.horaPico}</div>
+                <div style="font-size: 14px;">Hora con más registros en la última semana</div>
+                <div style="font-size: 12px; margin-top: 10px;">${kpis.distribucion.actividadPico} registros en esta franja</div>
+              </div>
+            </div>
+          </div>
+        `;
+        Swal.fire({ title: '📊 Dashboard Administrador', html: html, width: '700px', confirmButtonText: 'Cerrar', customClass: { popup: 'swal2-popup' } });
+      } else {
+        Swal.fire('Error', resultado.msg || 'Error al cargar KPIs', 'error');
+      }
+    }).withFailureHandler(function (error) {
+      Swal.close(); Swal.fire('Error', 'Error de conexión: ' + error.message, 'error');
+    }).obtenerKPIsAdministrador();
+  }
+
+  function mostrarKPIsDirector() {
+    Swal.fire({ title: '📊 Cargando Dashboard...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    google.script.run.withSuccessHandler(function (resultado) {
+      Swal.close();
+      if (resultado.status === 'ok') {
+        var kpis = resultado.kpis;
+        var html = `
+          <div style="text-align: left; max-height: 70vh; overflow-y: auto;">
+            <div style="margin-bottom: 25px;">
+              <h3 style="color: var(--color-green-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-chart-pie"></i> RESUMEN DEL DÍA
+              </h3>
+              <div style="display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 15px; margin-top: 15px;">
+                <div style="background: linear-gradient(135deg, #6AB04C, #7BCF5A); color: white; padding: 20px; border-radius: 10px; text-align: center;">
+                  <div style="font-size: 32px; font-weight: bold;">${kpis.hoy.registros}</div>
+                  <div style="font-size: 13px;">Registros Hoy</div>
+                </div>
+                <div style="background: linear-gradient(135deg, #E74C3C, #EC7063); color: white; padding: 20px; border-radius: 10px; text-align: center;">
+                  <div style="font-size: 32px; font-weight: bold;">${kpis.hoy.novedades}</div>
+                  <div style="font-size: 13px;">Novedades</div>
+                </div>
+                <div style="background: linear-gradient(135deg, #4A6FA5, #5A7FB5); color: white; padding: 20px; border-radius: 10px; text-align: center;">
+                  <div style="font-size: 32px; font-weight: bold;">${kpis.hoy.usuariosActivos}</div>
+                  <div style="font-size: 13px;">Usuarios Activos</div>
+                </div>
+                <div style="background: linear-gradient(135deg, #F39C12, #F5B041); color: white; padding: 20px; border-radius: 10px; text-align: center;">
+                  <div style="font-size: 32px; font-weight: bold;">${kpis.hoy.porcentajeActividad}</div>
+                  <div style="font-size: 13px;">Participación</div>
+                </div>
+              </div>
+            </div>
+            ${kpis.alertas.novedadesRecientes.length > 0 ? `
+            <div style="margin-bottom: 25px;">
+              <h3 style="color: var(--color-orange-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-exclamation-circle"></i> NOVEDADES RECIENTES
+              </h3>
+              <div style="background: var(--bg-light); padding: 15px; border-radius: 10px; margin-top: 15px; max-height: 250px; overflow-y: auto;">
+                ${kpis.alertas.novedadesRecientes.map((nov, index) => `
+                  <div style="margin-bottom: 12px; padding: 12px; background: white; border-radius: 8px; border-left: 4px solid ${nov.tieneFoto ? '#9B59B6' : '#F39C12'};">
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 5px;">
+                      <span style="font-weight: bold; color: var(--text-dark);">${nov.usuario}</span>
+                      <span style="font-size: 11px; color: var(--text-light);">${nov.hora}</span>
+                    </div>
+                    <div style="font-size: 13px; color: var(--text-dark);">
+                      ${nov.detalle}
+                      ${nov.tieneFoto ? ' <span style="color: #9B59B6; font-size: 12px;">(con foto)</span>' : ''}
+                    </div>
+                    <div style="font-size: 11px; color: var(--text-light); margin-top: 5px;">
+                      ${nov.fecha}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </div>
+            ` : ''}
+            ${kpis.alertas.zonasProblema.length > 0 ? `
+            <div style="margin-bottom: 25px;">
+              <h3 style="color: var(--color-red-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-map-marked-alt"></i> ZONAS QUE REQUIEREN ATENCIÓN
+              </h3>
+              <div style="background: #fff0f0; padding: 15px; border-radius: 10px; margin-top: 15px; border: 1px solid #ffcccc;">
+                ${kpis.alertas.zonasProblema.map((zona, index) => `
+                  <div style="margin-bottom: 10px; padding: 10px; background: white; border-radius: 6px; display: flex; justify-content: space-between; align-items: center;">
+                    <span style="font-weight: bold;">${index + 1}. ${zona.zona}</span>
+                    <span style="color: var(--color-red-primary); font-weight: bold; background: #ffeaea; padding: 3px 10px; border-radius: 12px; font-size: 12px;">
+                      ${zona.count} novedades
+                    </span>
+                  </div>
+                `).join('')}
+                <div style="font-size: 12px; color: #E74C3C; margin-top: 10px; text-align: center;">
+                  <i class="fas fa-info-circle"></i> Se recomienda supervisar estas zonas
+                </div>
+              </div>
+            </div>
+            ` : ''}
+            <div style="margin-bottom: 15px;">
+              <h3 style="color: var(--color-blue-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-chart-bar"></i> VISIÓN SEMANAL
+              </h3>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 15px;">
+                <div style="background: var(--bg-light); padding: 15px; border-radius: 10px;">
+                  <h4 style="margin-top: 0; color: var(--color-green-dark);">📅 Últimos 7 días</h4>
+                  <p><i class="fas fa-check-square" style="color: var(--color-green-primary);"></i> Registros: <strong>${kpis.semana.registros}</strong></p>
+                  <p><i class="fas fa-exclamation-triangle" style="color: var(--color-orange-primary);"></i> Novedades: <strong>${kpis.semana.novedades}</strong></p>
+                  <p><i class="fas fa-chart-line" style="color: var(--color-blue-primary);"></i> Promedio diario: <strong>${kpis.semana.promedioDiario}</strong></p>
+                </div>
+                <div style="background: var(--bg-light); padding: 15px; border-radius: 10px;">
+                  <h4 style="margin-top: 0; color: var(--color-green-dark);">⏰ HORA PICO</h4>
+                  <div style="text-align: center; padding: 15px;">
+                    <div style="font-size: 36px; font-weight: bold; color: var(--color-blue-primary);">${kpis.alertas.horaPico}</div>
+                    <div style="font-size: 13px; color: var(--text-light);">Mayor actividad de registros</div>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        `;
+        Swal.fire({ title: '📊 Dashboard Director', html: html, width: '650px', confirmButtonText: 'Cerrar', customClass: { popup: 'swal2-popup' } });
+      } else {
+        Swal.fire('Error', resultado.msg || 'Error al cargar KPIs', 'error');
+      }
+    }).withFailureHandler(function (error) {
+      Swal.close(); Swal.fire('Error', 'Error de conexión: ' + error.message, 'error');
+    }).obtenerKPIsDirector();
+  }
+
+  /* === FUNCIÓN PARA CONFIGURAR REPORTES AUTOMÁTICOS === */
+  function configurarReportesAutomaticos() {
+    Swal.fire({
+      title: '⚙️ Configurar Reportes Automáticos',
+      html: `
+        <div style="text-align: left; padding: 15px;">
+          <p><strong>¿Desea configurar los reportes automáticos?</strong></p>
+          <p>Se configurarán los siguientes reportes:</p>
+          <ul>
+            <li><strong>📅 Diario:</strong> Todos los días a las 18:00</li>
+            <li><strong>📈 Semanal:</strong> Lunes a las 08:00</li>
+            <li><strong>🏆 Mensual:</strong> Día 1 de cada mes a las 09:00</li>
+          </ul>
+          <p><strong>Destinatarios:</strong></p>
+          <ul>
+            <li>Administrador: soporte@colegiomayordelosandes.edu.co</li>
+            <li>Director: adperez@colegiomayordelosandes.edu.co</li>
+          </ul>
+          <div style="background: #f8f9fa; padding: 15px; border-radius: 8px; margin-top: 20px; border-left: 4px solid #6AB04C;">
+            <p style="margin: 0; font-size: 13px; color: #666;">
+              <i class="fas fa-info-circle"></i> Los reportes se enviarán automáticamente y recibirá un correo de confirmación.
+            </p>
+          </div>
+        </div>
+      `,
+      icon: 'question',
+      showCancelButton: true,
+      confirmButtonText: '✅ Sí, Configurar',
+      cancelButtonText: '❌ Cancelar',
+      width: '500px'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({
+          title: 'Configurando...', html: 'Por favor espere...', allowOutsideClick: false, didOpen: () => {
+            Swal.showLoading();
+            google.script.run.withSuccessHandler(function (respuesta) {
+              Swal.close();
+              if (respuesta.status === 'ok') {
+                Swal.fire({
+                  icon: 'success', title: '✅ Configuración Exitosa', html: `
+                <div style="text-align: left;">
+                  <p>Los reportes automáticos han sido configurados:</p>
+                  <ul>${respuesta.triggers.map(t => `<li><strong>${t.tipo}:</strong> ${t.descripcion}</li>`).join('')}</ul>
+                  <p>Recibirá un correo de confirmación en <strong>soporte@colegiomayordelosandes.edu.co</strong></p>
+                </div>`, confirmButtonText: 'Entendido'
+                });
+              } else { Swal.fire('❌ Error', respuesta.message, 'error'); }
+            }).withFailureHandler(function (error) {
+              Swal.close(); Swal.fire('❌ Error', 'Error de conexión: ' + error.message, 'error');
+            }).configurarTodoAutomatico();
+          }
+        });
+      }
+    });
+  }
+
+  /* --- FUNCIÓN COMPLETA DE NOTIFICACIONES PARA DIRECTOR --- */
+  function openNotifModal() {
+    Swal.fire({
+      title: '📤 Enviar Notificaciones',
+      html: `
+        <div style="text-align: left; margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 5px; font-weight: 600;">Tipo de envío:</label>
+          <select id="tipoEnvio" class="swal2-input" onchange="cambiarTipoEnvio()" style="width: 100%;">
+            <option value="todos">📢 Todos los usuarios</option>
+            <option value="rol">👥 Por Rol/Perfil</option>
+            <option value="grupo">🏢 Por Grupo/Área</option>
+            <option value="individual">👤 Usuarios específicos</option>
+          </select>
+        </div>
+        
+        <div id="filtroRolContainer" style="display: none; margin-bottom: 15px;">
+          <label style="display: block; margin-bottom: 5px; font-weight: 600;">Filtrar por Rol:</label>
+          <select id="filtroRol" class="swal2-input" onchange="cargarUsuariosPorRol()" style="width: 100%;">
+            <option value="">Selecciona un rol</option>
+            <option value="DOCENTE">DOCENTE</option>
+            <option value="JEFE DE AREA">JEFE DE AREA</option>
+            <option value="ASISTENTE">ASISTENTE</option>
+            <option value="DIRECTOR PREESCOLAR">DIRECTOR PREESCOLAR</option>
+            <option value="ADMINISTRADOR GENERAL">ADMINISTRADOR GENERAL</option>
+          </select>
+        </div>
+        
+        <div id="selectorDestinos" style="display: none; margin-bottom: 15px; max-height: 200px; overflow-y: auto;">
+          <label style="display: block; margin-bottom: 5px; font-weight: 600;">Seleccionar destinatarios:</label>
+          <div id="listaUsuariosContainer"></div>
+        </div>
+        
+        <input id="notifAsunto" class="swal2-input" placeholder="✉️ Asunto de la notificación" style="margin-bottom: 10px;">
+        <textarea id="notifMensaje" class="swal2-textarea" placeholder="📝 Escribe tu mensaje aquí..." style="min-height: 120px; width: 100%; margin-bottom: 10px;"></textarea>
+        
+        <small style="color: #666; display: block; margin-top: 10px; font-size: 12px;">
+          <i class="fas fa-info-circle"></i> Las notificaciones se enviarán por correo electrónico a los usuarios seleccionados.
+        </small>
+      `,
+      showCancelButton: true,
+      confirmButtonText: '🚀 Enviar Notificaciones',
+      cancelButtonText: '❌ Cancelar',
+      width: '500px',
+      customClass: { popup: 'swal2-popup', input: 'swal2-input', textarea: 'swal2-textarea' },
+      didOpen: () => { cargarTodosUsuariosParaNotificaciones(); },
+      preConfirm: () => {
+        const tipoEnvio = document.getElementById('tipoEnvio').value;
+        const asunto = document.getElementById('notifAsunto').value;
+        const mensaje = document.getElementById('notifMensaje').value;
+        if (!asunto.trim()) { Swal.showValidationMessage('El asunto es obligatorio'); return false; }
+        if (!mensaje.trim()) { Swal.showValidationMessage('El mensaje es obligatorio'); return false; }
+        let destinos = []; let rolFiltro = null;
+        if (tipoEnvio === 'todos') { destinos = 'todos'; }
+        else if (tipoEnvio === 'rol') {
+          const filtro = document.getElementById('filtroRol').value;
+          if (!filtro) { Swal.showValidationMessage('Selecciona un rol'); return false; }
+          destinos = filtro; rolFiltro = filtro;
+        }
+        else if (tipoEnvio === 'grupo') { Swal.showValidationMessage('Función por grupo aún no implementada'); return false; }
+        else if (tipoEnvio === 'individual') {
+          const checkboxes = document.querySelectorAll('.usuario-checkbox:checked');
+          if (checkboxes.length === 0) { Swal.showValidationMessage('Selecciona al menos un usuario'); return false; }
+          destinos = Array.from(checkboxes).map(cb => cb.value);
+          rolFiltro = document.getElementById('filtroRol').value || null;
+        }
+        return { tipoEnvio: tipoEnvio, destinos: JSON.stringify(destinos), asunto: asunto, mensaje: mensaje, rolFiltro: rolFiltro };
+      }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({ title: '⏳ Enviando...', html: 'Validando y enviando notificaciones...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+        google.script.run.withSuccessHandler((res) => {
+          if (res.status === 'ok') {
+            let htmlResultado = `<div style="text-align: left; max-height: 300px; overflow-y: auto;"><p><strong>✅ Resultado del envío:</strong></p><p>Notificaciones enviadas: <strong>${res.enviados}</strong></p><p>Errores: <strong>${res.errores}</strong></p>`;
+            if (res.detalles && res.detalles.length > 0) {
+              htmlResultado += `<p><strong>Detalles:</strong></p>`;
+              res.detalles.forEach(d => { htmlResultado += `<p style="margin: 2px 0; font-size: 12px;">${d.usuario}: ${d.status}</p>`; });
+            }
+            htmlResultado += `</div>`;
+            Swal.fire({ icon: 'success', title: '¡Notificaciones enviadas!', html: htmlResultado, confirmButtonText: 'Aceptar', width: '500px' });
+          } else { Swal.fire('❌ Error', res.msg || 'Error al enviar notificaciones', 'error'); }
+        }).withFailureHandler((error) => { Swal.fire('❌ Error', 'Error de conexión: ' + error.message, 'error'); }).enviarCorreoMasivo(currentUser, result.value);
+      }
+    });
+  }
+
+  function cambiarTipoEnvio() {
+    const tipo = document.getElementById('tipoEnvio').value;
+    const filtroRolContainer = document.getElementById('filtroRolContainer');
+    const selectorDestinos = document.getElementById('selectorDestinos');
+    if (tipo === 'todos') { filtroRolContainer.style.display = 'none'; selectorDestinos.style.display = 'none'; }
+    else if (tipo === 'rol') { filtroRolContainer.style.display = 'block'; selectorDestinos.style.display = 'none'; }
+    else if (tipo === 'individual') { filtroRolContainer.style.display = 'block'; selectorDestinos.style.display = 'block'; cargarUsuariosPorRol(); }
+    else { filtroRolContainer.style.display = 'none'; selectorDestinos.style.display = 'none'; }
+  }
+
+  function cargarTodosUsuariosParaNotificaciones() {
+    google.script.run.withSuccessHandler((usuarios) => { window.todosUsuariosNotificaciones = usuarios; }).obtenerUsuariosPorRolParaNotificaciones(null);
+  }
+
+  function cargarUsuariosPorRol() {
+    const rolSeleccionado = document.getElementById('filtroRol').value;
+    const listaUsuariosContainer = document.getElementById('listaUsuariosContainer');
+    const tipoEnvio = document.getElementById('tipoEnvio').value;
+    if (!rolSeleccionado && tipoEnvio === 'individual') { listaUsuariosContainer.innerHTML = '<p style="color: #666; font-size: 12px;">Selecciona un rol primero</p>'; return; }
+    google.script.run.withSuccessHandler((usuarios) => {
+      if (usuarios.length === 0) { listaUsuariosContainer.innerHTML = '<p style="color: #666; font-size: 12px;">No hay usuarios en este rol</p>'; return; }
+      let html = '<div style="display: flex; flex-direction: column; gap: 8px;">';
+      if (tipoEnvio === 'individual') {
+        html += `<div style="margin-bottom: 10px; padding: 5px; background: #f8f9fa; border-radius: 5px;">
+                    <label style="font-size: 12px; cursor: pointer; display: flex; align-items: center;">
+                      <input type="checkbox" id="selectAllUsuarios" onchange="toggleSelectAllUsuarios()" style="margin-right: 8px;">
+                      <strong> Seleccionar todos (${usuarios.length} usuarios)</strong>
+                    </label>
+                  </div>`;
+      }
+      usuarios.forEach(usuario => {
+        if (tipoEnvio === 'individual') {
+          html += `<div class="usuario-checkbox-container">
+                      <input type="checkbox" class="usuario-checkbox" value="${usuario.id}" id="user_${usuario.id}">
+                      <div class="usuario-info">
+                        <span class="usuario-nombre">${usuario.nombre}</span>
+                        <span class="usuario-datos">${usuario.rol} ${usuario.grupo ? ' - ' + usuario.grupo : ''}</span>
+                      </div>
+                    </div>`;
+        } else {
+          html += `<div style="padding: 8px; border-bottom: 1px solid #eee;">
+                      <strong>${usuario.nombre}</strong><br>
+                      <small style="color: #666;">${usuario.rol} ${usuario.grupo ? ' - ' + usuario.grupo : ''}</small>
+                    </div>`;
+        }
+      });
+      html += '</div>';
+      listaUsuariosContainer.innerHTML = html;
+    }).obtenerUsuariosPorRolParaNotificaciones(rolSeleccionado);
+  }
+
+  function toggleSelectAllUsuarios() {
+    const selectAll = document.getElementById('selectAllUsuarios');
+    const checkboxes = document.querySelectorAll('.usuario-checkbox');
+    checkboxes.forEach(cb => { cb.checked = selectAll.checked; });
+  }
+
+  /* CONTINUACIÓN EN PARTE 2 */
+
+  /* --- FUNCIONES DE ADMINISTRACIÓN DE AVATARES (ELIMINADAS) --- */
+  // Las funciones migrarGenerosAdmin y actualizarAvataresAdmin han sido eliminadas
+
+  function openReemplazoModal() {
+    google.script.run.withSuccessHandler(list => {
+      let opts = list.map(d => `<option value="${d.nombre}">${d.nombre}</option>`).join('');
+      Swal.fire({
+        title: 'Reemplazo',
+        html: `<select id="ra" class="swal2-input">${opts}</select>
+                  <select id="rr" class="swal2-input">${opts}</select>
+                  <input id="rm" class="swal2-input" placeholder="Motivo del reemplazo">`,
+        preConfirm: () => [document.getElementById('ra').value, document.getElementById('rr').value, document.getElementById('rm').value]
+      }).then(r => {
+        if (r.isConfirmed) google.script.run.gestionarReemplazoFinal(currentUser, r.value[0], r.value[1], r.value[2]);
+      });
+    }).obtenerListaDocentes();
+  }
+
+  // === 3. GPS (AUTOMÁTICO Y SILENCIOSO) ===
+  function iniciarGPS() {
+    if (!navigator.geolocation) {
+      if (typeof M !== 'undefined') M.toast({ html: '❌ Tu celular no tiene GPS' });
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        userLat = position.coords.latitude;
+        userLon = position.coords.longitude;
+        console.log("GPS Localizado:", userLat, userLon);
+
+        // Actualizar indicador UI si existe
+        const gpsStatus = document.getElementById('gps-accuracy') || document.getElementById('gps-status');
+        if (gpsStatus) {
+          gpsStatus.classList.remove('hidden');
+          gpsStatus.style.color = '#4CAF50';
+          if (gpsStatus.tagName === 'DIV' || gpsStatus.tagName === 'SPAN') {
+            gpsStatus.innerHTML = `<i class="fas fa-satellite-dish"></i> GPS Listo (±${Math.round(position.coords.accuracy)}m)`;
+          }
+        }
+      },
+      (err) => {
+        console.warn("Error GPS:", err);
+        if (typeof M !== 'undefined') M.toast({ html: '⚠️ Activa la Ubicación/GPS para poder fichar.' });
+      },
+      { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 }
+    );
+  }
+
+  // === 4. CÁMARA (FIX ANDROID / IPHONE) ===
+  function iniciarEscanerQR() {
+    // Prevenir doble inicio
+    if (html5QrCode && html5QrCode.isScanning) {
+      console.log("El escáner ya está corriendo");
+      return;
+    }
+
+    const readerDiv = document.getElementById('reader');
+    if (!readerDiv) { if (typeof M !== 'undefined') M.toast({ html: 'Error interno: No encuentro el visor' }); return; }
+
+    document.getElementById('view-dash').classList.add('hidden');
+    document.getElementById('view-scan').classList.remove('hidden');
+
+    // Limpiar instancia previa si existe
+    html5QrCode = new Html5Qrcode("reader");
+
+    const configEscaneo = {
+      fps: 10,
+      qrbox: { width: 250, height: 250 },
+      aspectRatio: 1.0
+    };
+    const configCamara = { facingMode: "environment" }; // Cámara trasera
+
+    if (typeof M !== 'undefined') M.toast({ html: '🎥 Iniciando cámara...' });
+
+    html5QrCode.start(
+      configCamara,
+      configEscaneo,
+      (decodedText, decodedResult) => {
+        // ÉXITO AL LEER
+        detenerCamara(); // Detener inmediatamente
+        procesarLectura(decodedText);
+      },
+      (errorMessage) => { /* Ignorar errores cuadro a cuadro */ }
+    ).then(() => {
+      // Asegurar playsinline manualmente
+      const videoElement = document.querySelector('#reader video');
+      if (videoElement) {
+        videoElement.setAttribute('playsinline', 'true');
+        videoElement.setAttribute('webkit-playsinline', 'true');
+      }
+    }).catch(err => {
+      console.error("Error start:", err);
+      let msg = 'Error al abrir cámara.';
+      if (err.name == 'NotAllowedError') msg = '❌ Permiso denegado. Activa la cámara en el navegador.';
+      if (err.name == 'NotFoundError') msg = '❌ No se encontró cámara.';
+      if (typeof M !== 'undefined') M.toast({ html: msg });
+      detenerCamara();
+    });
+  }
+
+  function detenerCamara() {
+    if (html5QrCode) {
+      html5QrCode.stop().then(() => {
+        html5QrCode.clear();
+        document.getElementById('reader').innerHTML = "";
+        console.log("Cámara detenida.");
+      }).catch(err => console.log("Error al detener", err));
+    }
+    document.getElementById('view-scan').classList.add('hidden');
+    document.getElementById('view-dash').classList.remove('hidden');
+  }
+
+  // === 5. LÓGICA DE VALIDACIÓN (RADIO 50M) ===
+  function procesarLectura(qrData) {
+    if (typeof M !== 'undefined') M.toast({ html: '🔍 Verificando ubicación...' });
+
+    // Validar GPS primero
+    if (userLat === null || userLon === null) {
+      // Reintentar GPS rápido
+      navigator.geolocation.getCurrentPosition((pos) => {
+        userLat = pos.coords.latitude;
+        userLon = pos.coords.longitude;
+        procesarLectura(qrData); // Reintentar recursivo
+      }, () => {
+        if (typeof M !== 'undefined') M.toast({ html: '❌ Error: No se detecta tu ubicación GPS.' });
+      }, { enableHighAccuracy: true });
+      return;
+    }
+
+    Swal.fire({
+      title: '⏳ Validando',
+      html: '<div style="text-align: center;"><i class="fas fa-spinner fa-spin fa-2x" style="color: var(--color-green-primary);"></i><br><br>Validando horario y GPS...</div>',
+      allowOutsideClick: false,
+      showConfirmButton: false,
+      width: '350px'
+    });
+
+    // Enviar al backend para validar distancia y registrar
+    google.script.run
+      .withSuccessHandler(function (response) {
+        Swal.close();
+        if (response.success) {
+          Swal.fire('¡Éxito!', response.message, 'success');
+        } else {
+          Swal.fire('Atención', response.message, 'warning');
+        }
+      })
+      .withFailureHandler(function (err) {
+        Swal.close();
+        Swal.fire('Error', 'Fallo de conexión o sesión: ' + err.message, 'error');
+      })
+      .srvRegistrarVisita(currentUser, qrData, userLat, userLon, DISTANCIA_MAXIMA);
+  }
+
+  // Compatibilidad con funciones anteriores
+  function startScan() { iniciarEscanerQR(); }
+  function stopScan() { detenerCamara(); }
+  function obtenerUbicacion() { iniciarGPS(); }
+  function validarDistanciaYRegistrar(codigo) { procesarLectura(codigo); }
+
+  /* --- LÓGICA OFFLINE --- */
+  function guardarEnCola(data) {
+    let cola = JSON.parse(localStorage.getItem('cola_offline')) || [];
+    cola.push(data);
+    localStorage.setItem('cola_offline', JSON.stringify(cola));
+    actualizarIndicadorOffline();
+
+    // Toast amarillo para avisar
+    const Toast = Swal.mixin({
+      toast: true, position: 'top-end', showConfirmButton: false, timer: 3000, timerProgressBar: true
+    });
+    Toast.fire({ icon: 'warning', title: '⚠️ Sin conexión. Guardado para sincronizar luego.' });
+    Swal.close(); // Cerrar el loading si estaba abierto
+  }
+
+  function actualizarIndicadorOffline() {
+    let cola = JSON.parse(localStorage.getItem('cola_offline')) || [];
+    const indicator = document.getElementById('offline-indicator');
+    const countSpan = document.getElementById('offline-count');
+
+    if (cola.length > 0) {
+      indicator.classList.remove('hidden');
+      countSpan.innerText = cola.length;
+    } else {
+      indicator.classList.add('hidden');
+    }
+  }
+
+  function sincronizarCola() {
+    if (!navigator.onLine) return; // Si seguimos offline, no hacer nada
+
+    let cola = JSON.parse(localStorage.getItem('cola_offline')) || [];
+    if (cola.length === 0) return;
+
+    // Tomamos el primer elemento
+    const item = cola[0];
+
+    // Intentamos enviarlo
+    google.script.run.withSuccessHandler((res) => {
+      if (res.status === 'ok') {
+        // Si fue exitoso, lo sacamos de la cola
+        cola.shift();
+        localStorage.setItem('cola_offline', JSON.stringify(cola));
+        actualizarIndicadorOffline();
+
+        // Si la cola queda vacía, avisamos
+        if (cola.length === 0) {
+          const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 3000 });
+          Toast.fire({ icon: 'success', title: '✅ Sincronización completada' });
+        } else {
+          // Si quedan más, seguimos sincronizando (recursivo)
+          sincronizarCola();
+        }
+      } else {
+        // Si el servidor responde error lógico (ej: zona inválida), ¿qué hacemos?
+        // Opción A: Lo borramos igual para no trabar la cola.
+        // Opción B: Lo dejamos.
+        // Por ahora, asumimos que si el server respondió, ya no es problema de conexión.
+        // Lo borramos para evitar bucle infinito de error.
+        console.error("Error lógico en sync, eliminando item:", res.msg);
+        cola.shift();
+        localStorage.setItem('cola_offline', JSON.stringify(cola));
+        actualizarIndicadorOffline();
+        sincronizarCola(); // Sanguímos con el siguiente
+      }
+    }).withFailureHandler((err) => {
+      console.error("Error de red en sync:", err);
+      // Si falla la red, no hacemos nada, se queda en la cola para el próximo intento
+    }).registrarZona(item.usuario, item.zona, item.lat, item.lng, item.userAgent, item.accuracy);
+  }
+
+  // Eventos
+  window.addEventListener('online', () => {
+    const Toast = Swal.mixin({ toast: true, position: 'top-end', showConfirmButton: false, timer: 3000 });
+    Toast.fire({ icon: 'info', title: '🌐 Conexión restaurada via Online' });
+    sincronizarCola();
+  });
+
+  // Intervalo de seguridad (cada 30 seg)
+  setInterval(sincronizarCola, 30000);
+
+  // Al cargar, verificar indicador
+  document.addEventListener('DOMContentLoaded', actualizarIndicadorOffline);
+
+
+  function registrarZonaConGPS(codigo, lat, lng, acc) {
+
+    // Datos para guardar en cola si falla
+    const datosRegistro = {
+      usuario: currentUser,
+      zona: codigo,
+      lat: lat,
+      lng: lng,
+      userAgent: navigator.userAgent,
+      accuracy: acc,
+      timestamp: new Date().getTime()
+    };
+
+    // 1. Verificar ONLINE antes de enviar
+    if (!navigator.onLine) {
+      guardarEnCola(datosRegistro);
+      return;
+    }
+
+    // 2. Intentar enviar
+    try {
+      google.script.run.withSuccessHandler((respuesta) => {
+        if (respuesta.status === 'ok') {
+          Swal.fire({
+            title: respuesta.titulo || '✅ Registrado',
+            html: `
+                <div style="text-align: center; padding: 15px;">
+                  <i class="fas fa-check-circle fa-beat" style="font-size: 60px; color: var(--color-green-primary); margin-bottom: 15px;"></i>
+                  <div style="text-align: left; background: #f8f9fa; padding: 15px; border-radius: 10px; margin-top: 15px;">
+                    <p style="margin: 5px 0;"><strong>📍 Zona:</strong> ${respuesta.zona}</p>
+                    <p style="margin: 5px 0;"><strong>📅 Fecha:</strong> ${respuesta.fecha}</p>
+                    <p style="margin: 5px 0;"><strong>⏰ Hora:</strong> ${respuesta.hora}</p>
+                    ${respuesta.horario ? `<p style="margin: 5px 0; font-size: 12px; color: #666;"><strong>📋 Horario Zona:</strong> ${respuesta.horario}</p>` : ''}
+                    ${lat && lng ? `<p style="margin: 5px 0; font-size: 12px; color: #666;"><strong>📍 GPS:</strong> ${lat.toFixed(6)}, ${lng.toFixed(6)} <span style="font-size:10px;">(±${Math.round(acc || 0)}m)</span></p>` : ''}
+                  </div>
+                  <div style="margin-top: 20px; font-size: 14px; color: #666;">
+                    <i class="fas fa-check"></i> Registro completado exitosamente
+                  </div>
+                </div>
+              `,
+            icon: 'success',
+            confirmButtonText: 'Aceptar',
+            width: '420px',
+            customClass: { popup: 'swal2-popup' }
+          });
+        } else {
+          Swal.fire({
+            title: respuesta.titulo || '❌ Error',
+            html: `
+                <div style="text-align: center;">
+                  <i class="fas fa-exclamation-triangle" style="font-size: 50px; color: var(--color-red-primary); margin-bottom: 15px;"></i>
+                  <p style="font-size: 16px; color: #2c3e50;"><strong>${respuesta.msg}</strong></p>
+                  ${respuesta.horaActual ? `<p style="font-size: 14px; color: #666; margin-top: 10px;">Hora actual: ${respuesta.horaActual}</p>` : ''}
+                  ${respuesta.distancia ? `<p style="font-size: 14px; color: #666;">Distancia: ${respuesta.distancia}m (máx 15m)</p>` : ''}
+                  ${acc ? `<p style="font-size: 12px; color: #e74c3c;">Precisión GPS: ±${Math.round(acc)}m</p>` : ''}
+                  ${lat && lng ? `<p style="font-size: 12px; color: #999; margin-top: 10px;">Posición GPS: ${lat.toFixed(6)}, ${lng.toFixed(6)}</p>` : ''}
+                </div>
+              `,
+            icon: 'error',
+            confirmButtonText: 'Entendido',
+            width: '450px'
+          });
+        }
+      }).withFailureHandler((error) => {
+        // Si falla por timeout o error de red, guardamos en cola
+        console.warn("Fallo en red, guardando offline...", error);
+        guardarEnCola(datosRegistro);
+      }).registrarZona(currentUser, codigo, lat, lng, navigator.userAgent, acc);
+    } catch (e) {
+      console.warn("Excepción al llamar google.script.run", e);
+      guardarEnCola(datosRegistro);
+    }
+  }
+
+  // Función para enviar código manual
+  function sendManual() {
+    const manualInput = document.getElementById('manual-code');
+    if (!manualInput) { Swal.fire('Error', 'No se encontró el campo de código manual', 'error'); return; }
+    const codigo = manualInput.value.trim();
+    if (codigo === '') { Swal.fire('Error', 'Por favor ingrese un código', 'warning'); return; }
+    validarDistanciaYRegistrar(codigo);
+    manualInput.value = '';
+  }
+
+  function getManualHtml() {
+    return `<div class="manual-input-group">
+              <input id="manual-code" placeholder="Código Manual">
+              <button class="btn btn-dark" onclick="sendManual()" style="width:60px;"><i class="fas fa-check"></i></button>
+            </div>`;
+  }
+
+  function logout() {
+    document.getElementById('logoutToggle').classList.add('hidden');
+    currentUser = null;
+    document.getElementById('view-dash').classList.add('hidden');
+    document.getElementById('view-login').classList.remove('hidden');
+    document.getElementById('pass').value = '';
+    document.getElementById('user').value = '';
+    Swal.fire({ title: 'Sesión Cerrada', text: 'Has salido del sistema correctamente.', icon: 'success', timer: 1500, showConfirmButton: false });
+  }
+
+  function addBtn(p, t, i, c, a) {
+    const b = document.createElement('button');
+    b.className = `btn ${c}`;
+    b.innerHTML = `<i class="fas fa-${i}"></i> ${t}`;
+    b.onclick = a;
+    p.appendChild(b);
+  }
+
+  /* === NUEVAS FUNCIONES PARA MÓDULO DE CONFIGURACIÓN === */
+  function abrirModuloConfiguracion() {
+    Swal.fire({ title: 'Cargando...', allowOutsideClick: false, didOpen: () => { Swal.showLoading(); } });
+    google.script.run.withSuccessHandler(function (horarios) {
+      var horariosConfig = horarios || { DOCENTE: { inicio: "06:00", fin: "15:00" }, JEFE_ASISTENTE: { inicio: "06:00", fin: "16:00" }, DIRECTOR: { inicio: "00:00", fin: "23:59" }, ADMIN: { inicio: "00:00", fin: "23:59" } };
+      Swal.fire({
+        title: '⚙️ Configuración del Sistema',
+        html: `
+          <div style="text-align: left; max-height: 500px; overflow-y: auto; padding: 10px;">
+            <div style="margin-bottom: 20px;">
+              <h4 style="color: var(--color-blue-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-clock"></i> Horarios por Perfil
+              </h4>
+              <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 15px;">
+                <div>
+                  <label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 5px;">DOCENTE</label>
+                  <div style="display: flex; gap: 5px;">
+                    <input type="time" id="horaInicioDocente" value="${horariosConfig.DOCENTE.inicio}" style="width: 100%;">
+                    <input type="time" id="horaFinDocente" value="${horariosConfig.DOCENTE.fin}" style="width: 100%;">
+                  </div>
+                </div>
+                <div>
+                  <label style="font-size: 13px; font-weight: 600; display: block; margin-bottom: 5px;">JEFE/ASISTENTE</label>
+                  <div style="display: flex; gap: 5px;">
+                    <input type="time" id="horaInicioJefe" value="${horariosConfig.JEFE_ASISTENTE.inicio}" style="width: 100%;">
+                    <input type="time" id="horaFinJefe" value="${horariosConfig.JEFE_ASISTENTE.fin}" style="width: 100%;">
+                  </div>
+                </div>
+              </div>
+              <small style="color: var(--text-light); font-size: 11px; display: block; margin-top: 10px;">
+                <i class="fas fa-info-circle"></i> ADMIN y DIRECTOR tienen acceso 24/7
+              </small>
+              <button class="btn btn-green" onclick="guardarHorarios()" style="width: 100%; margin-top: 15px; padding: 10px;">
+                <i class="fas fa-save"></i> Guardar Horarios
+              </button>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+              <h4 style="color: var(--color-blue-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-map-marker-alt"></i> Gestión de Zonas QR
+              </h4>
+              <select id="selectorZona" class="swal2-input" style="margin-bottom: 10px;" onchange="cargarDatosZona()">
+                <option value="">Seleccionar zona...</option>
+              </select>
+              <div id="datosZonaContainer" style="display: none;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                  <input type="text" id="nombreZona" placeholder="Nombre zona" class="swal2-input">
+                  <input type="text" id="codigoZona" placeholder="Código QR" class="swal2-input">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                  <input type="number" id="latitudZona" placeholder="Latitud" step="0.000001" class="swal2-input">
+                  <input type="number" id="longitudZona" placeholder="Longitud" step="0.000001" class="swal2-input">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px;">
+                  <input type="time" id="horaInicioZona" placeholder="Hora inicio" class="swal2-input">
+                  <input type="time" id="horaFinZona" placeholder="Hora fin" class="swal2-input">
+                </div>
+                <div style="display: flex; gap: 10px; margin-top: 15px;">
+                  <button class="btn btn-green" onclick="guardarZona()" style="flex: 1; padding: 10px;">
+                    <i class="fas fa-save"></i> Guardar
+                  </button>
+                  <button class="btn btn-red" onclick="eliminarZona()" style="flex: 1; padding: 10px;">
+                    <i class="fas fa-trash"></i> Eliminar
+                  </button>
+                </div>
+              </div>
+              <button class="btn btn-orange" onclick="nuevaZona()" style="width: 100%; margin-top: 10px; padding: 10px;">
+                <i class="fas fa-plus"></i> Nueva Zona
+              </button>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+              <h4 style="color: var(--color-blue-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-user-cog"></i> Gestión de Usuarios
+              </h4>
+              <select id="selectorUsuario" class="swal2-input" style="margin-bottom: 10px;" onchange="cargarDatosUsuario()">
+                <option value="">Seleccionar usuario...</option>
+              </select>
+                <button class="btn btn-green" onclick="crearNuevoUsuario()" style="width: 100%; margin-bottom: 15px; padding: 10px;">
+    <i class="fas fa-user-plus"></i> Crear Nuevo Usuario
+  </button>
+  
+  <div id="datosUsuarioContainer" style="display: none;">
+                <input type="password" id="nuevaPassword" placeholder="Nueva contraseña" class="swal2-input" style="margin-bottom: 10px;">
+                <select id="rolUsuario" class="swal2-input" style="margin-bottom: 10px;">
+                  <option value="DOCENTE">DOCENTE</option>
+                  <option value="JEFE DE AREA">JEFE DE AREA</option>
+                  <option value="ASISTENTE">ASISTENTE</option>
+                  <option value="DIRECTOR PREESCOLAR">DIRECTOR PREESCOLAR</option>
+                  <option value="ADMINISTRADOR GENERAL">ADMINISTRADOR GENERAL</option>
+                </select>
+                <div style="display: flex; gap: 10px;">
+                  <button class="btn btn-green" onclick="actualizarUsuario()" style="flex: 1; padding: 10px;">
+                    <i class="fas fa-sync"></i> Actualizar
+                  </button>
+                  <button class="btn btn-red" onclick="resetearPassword()" style="flex: 1; padding: 10px;">
+                    <i class="fas fa-key"></i> Resetear
+                  </button>
+                </div>
+              </div>
+            </div>
+            
+            <div style="margin-bottom: 20px;">
+              <h4 style="color: var(--color-blue-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-tools"></i> Herramientas del Sistema
+              </h4>
+              <div style="display: grid; grid-template-columns: 1fr; gap: 10px;">
+                <button class="btn btn-purple" onclick="limpiarCacheSistema()" style="padding: 12px;">
+                  <i class="fas fa-broom"></i> Limpiar Cache del Sistema
+                </button>
+                <button class="btn btn-orange" onclick="migrarPasswordsSHA256()" style="padding: 12px;">
+                  <i class="fas fa-shield-alt"></i> Migrar Passwords a SHA256
+                </button>
+                <button class="btn btn-dark" onclick="generarReporteConfiguracion()" style="padding: 12px;">
+                  <i class="fas fa-file-export"></i> Exportar Configuración
+                </button>
+              </div>
+            </div>
+          </div>
+<!-- NUEVA SECCIÓN: Mantenimiento de Usuarios -->
+            <div style="margin-bottom: 20px;">
+              <h4 style="color: var(--color-blue-dark); border-bottom: 2px solid var(--border-light); padding-bottom: 8px;">
+                <i class="fas fa-user-cog"></i> Mantenimiento de Usuarios
+              </h4>
+              <div style="display: grid; grid-template-columns: 1fr; gap: 10px;">
+                <button class="btn btn-orange" onclick="ejecutarCopiaDocumentoAContraseñaPlano()" style="padding: 12px;">
+                  <i class="fas fa-copy"></i> Copiar Documento a Contraseña (Texto Plano)
+                </button>
+                <small style="color: var(--text-light); font-size: 11px; display: block; margin-top: 5px;">
+                  <i class="fas fa-info-circle"></i> Esta acción establecerá la contraseña de TODOS los usuarios como su número de documento (sin encriptar).
+                </small>
+              </div>
+            </div>
+        `,
+        width: '600px',
+        showCancelButton: true,
+        confirmButtonText: 'Cerrar',
+        cancelButtonText: 'Cancelar',
+        showConfirmButton: false,
+        didOpen: () => { cargarZonasParaSelector(); cargarUsuariosParaSelector(); }
+      });
+    }).obtenerConfiguracionHorarios();
+  }
+
+  function guardarHorarios() {
+    var horarios = {
+      DOCENTE: { inicio: document.getElementById('horaInicioDocente').value, fin: document.getElementById('horaFinDocente').value },
+      JEFE_ASISTENTE: { inicio: document.getElementById('horaInicioJefe').value, fin: document.getElementById('horaFinJefe').value },
+      DIRECTOR: { inicio: "00:00", fin: "23:59" },
+      ADMIN: { inicio: "00:00", fin: "23:59" }
+    };
+    Swal.fire({ title: 'Guardando...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    google.script.run.withSuccessHandler(function (resultado) {
+      Swal.close();
+      if (resultado.status === 'ok') { Swal.fire('Éxito', resultado.mensaje, 'success'); } else { Swal.fire('Error', resultado.mensaje, 'error'); }
+    }).guardarConfiguracionHorarios(horarios);
+  }
+
+  function cargarZonasParaSelector() {
+    google.script.run.withSuccessHandler((zonas) => {
+      const selector = document.getElementById('selectorZona');
+      selector.innerHTML = '<option value="">Seleccionar zona...</option>';
+      zonas.forEach(zona => { const option = document.createElement('option'); option.value = zona.id; option.textContent = `${zona.nombre} (${zona.codigo})`; selector.appendChild(option); });
+    }).obtenerZonasParaConfiguracion();
+  }
+
+  function cargarDatosZona() {
+    const zonaId = document.getElementById('selectorZona').value;
+    if (!zonaId) { document.getElementById('datosZonaContainer').style.display = 'none'; return; }
+    google.script.run.withSuccessHandler((zona) => {
+      if (zona) {
+        document.getElementById('datosZonaContainer').style.display = 'block';
+        document.getElementById('nombreZona').value = zona.nombre || '';
+        document.getElementById('codigoZona').value = zona.codigo || '';
+        document.getElementById('latitudZona').value = zona.latitud || '';
+        document.getElementById('longitudZona').value = zona.longitud || '';
+        document.getElementById('horaInicioZona').value = zona.horaInicio || '06:00';
+        document.getElementById('horaFinZona').value = zona.horaFin || '18:00';
+      }
+    }).obtenerDatosZona(zonaId);
+  }
+
+  function cargarUsuariosParaSelector() {
+    google.script.run.withSuccessHandler((usuarios) => {
+      const selector = document.getElementById('selectorUsuario');
+      selector.innerHTML = '<option value="">Seleccionar usuario...</option>';
+      usuarios.forEach(usuario => { const option = document.createElement('option'); option.value = usuario.id; option.textContent = `${usuario.nombre} (${usuario.rol})`; selector.appendChild(option); });
+    }).obtenerUsuariosParaConfiguracion();
+  }
+
+  function cargarDatosUsuario() {
+    const usuarioId = document.getElementById('selectorUsuario').value;
+    if (!usuarioId) { document.getElementById('datosUsuarioContainer').style.display = 'none'; return; }
+    google.script.run.withSuccessHandler((usuario) => {
+      if (usuario) {
+        document.getElementById('datosUsuarioContainer').style.display = 'block';
+        document.getElementById('rolUsuario').value = usuario.rol || 'DOCENTE';
+        document.getElementById('nuevaPassword').value = '';
+      }
+    }).obtenerDatosUsuario(usuarioId);
+  }
+
+  function nuevaZona() {
+    document.getElementById('selectorZona').value = '';
+    document.getElementById('datosZonaContainer').style.display = 'block';
+    document.getElementById('nombreZona').value = '';
+    document.getElementById('codigoZona').value = '';
+    document.getElementById('latitudZona').value = '';
+    document.getElementById('longitudZona').value = '';
+    document.getElementById('horaInicioZona').value = '06:00';
+    document.getElementById('horaFinZona').value = '18:00';
+  }
+
+  function guardarZona() {
+    const zonaId = document.getElementById('selectorZona').value;
+    const nombre = document.getElementById('nombreZona').value.trim();
+    const codigo = document.getElementById('codigoZona').value.trim();
+    const latitud = document.getElementById('latitudZona').value;
+    const longitud = document.getElementById('longitudZona').value;
+    const horaInicio = document.getElementById('horaInicioZona').value;
+    const horaFin = document.getElementById('horaFinZona').value;
+    if (!nombre || !codigo) { Swal.fire('Error', 'Nombre y código son obligatorios', 'warning'); return; }
+    const datosZona = { id: zonaId, nombre: nombre, codigo: codigo, latitud: latitud, longitud: longitud, horaInicio: horaInicio, horaFin: horaFin };
+    Swal.fire({ title: 'Guardando...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    google.script.run.withSuccessHandler((resultado) => {
+      Swal.close();
+      if (resultado.status === 'ok') { Swal.fire('Éxito', resultado.mensaje, 'success'); cargarZonasParaSelector(); document.getElementById('selectorZona').value = resultado.id || ''; cargarDatosZona(); } else { Swal.fire('Error', resultado.mensaje, 'error'); }
+    }).guardarZonaConfiguracion(datosZona);
+  }
+
+  function eliminarZona() {
+    const zonaId = document.getElementById('selectorZona').value;
+    if (!zonaId) { Swal.fire('Error', 'Selecciona una zona primero', 'warning'); return; }
+    Swal.fire({ title: '¿Eliminar Zona?', text: 'Esta acción no se puede deshacer', icon: 'warning', showCancelButton: true, confirmButtonText: 'Sí, eliminar', cancelButtonText: 'Cancelar' }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({ title: 'Eliminando...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+        google.script.run.withSuccessHandler((resultado) => {
+          Swal.close();
+          if (resultado.status === 'ok') { Swal.fire('Éxito', resultado.mensaje, 'success'); cargarZonasParaSelector(); document.getElementById('datosZonaContainer').style.display = 'none'; } else { Swal.fire('Error', resultado.mensaje, 'error'); }
+        }).eliminarZonaConfiguracion(zonaId);
+      }
+    });
+  }
+
+  function actualizarUsuario() {
+    const usuarioId = document.getElementById('selectorUsuario').value;
+    const nuevaPassword = document.getElementById('nuevaPassword').value.trim();
+    const nuevoRol = document.getElementById('rolUsuario').value;
+    if (!usuarioId) { Swal.fire('Error', 'Selecciona un usuario primero', 'warning'); return; }
+    Swal.fire({ title: 'Actualizando...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    google.script.run.withSuccessHandler((resultado) => {
+      Swal.close();
+      if (resultado.status === 'ok') { Swal.fire('Éxito', resultado.mensaje, 'success'); document.getElementById('nuevaPassword').value = ''; cargarUsuariosParaSelector(); } else { Swal.fire('Error', resultado.mensaje, 'error'); }
+    }).actualizarUsuarioConfiguracion(usuarioId, nuevaPassword, nuevoRol);
+  }
+
+  function resetearPassword() {
+    const usuarioId = document.getElementById('selectorUsuario').value;
+    if (!usuarioId) { Swal.fire('Error', 'Selecciona un usuario primero', 'warning'); return; }
+    Swal.fire({ title: '¿Resetear Contraseña?', text: 'Se establecerá la contraseña por defecto "123456"', icon: 'question', showCancelButton: true, confirmButtonText: 'Sí, resetear', cancelButtonText: 'Cancelar' }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({ title: 'Reseteando...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+        google.script.run.withSuccessHandler((resultado) => {
+          Swal.close();
+          if (resultado.status === 'ok') { Swal.fire('Éxito', resultado.mensaje, 'success'); } else { Swal.fire('Error', resultado.mensaje, 'error'); }
+        }).resetearPasswordUsuario(usuarioId);
+      }
+    });
+  }
+
+  function limpiarCacheSistema() {
+    Swal.fire({ title: '¿Limpiar Cache?', html: 'Esto mejorará el rendimiento pero la próxima carga será más lenta.', icon: 'question', showCancelButton: true, confirmButtonText: 'Sí, limpiar', cancelButtonText: 'Cancelar' }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({ title: 'Limpiando...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+        google.script.run.withSuccessHandler((resultado) => {
+          Swal.close();
+          if (resultado.status === 'ok') { Swal.fire('Éxito', resultado.mensaje, 'success'); } else { Swal.fire('Error', resultado.mensaje, 'error'); }
+        }).limpiarCacheCompleto();
+      }
+    });
+  }
+
+  function migrarPasswordsSHA256() {
+    Swal.fire({ title: '¿Migrar Passwords?', html: 'Convertirá todas las contraseñas al formato SHA256 seguro.<br><small>Los usuarios deberán seguir usando sus contraseñas actuales.</small>', icon: 'warning', showCancelButton: true, confirmButtonText: 'Sí, migrar', cancelButtonText: 'Cancelar' }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({ title: 'Migrando...', html: 'Procesando todas las contraseñas...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+        google.script.run.withSuccessHandler((resultado) => {
+          Swal.close();
+          if (resultado.status === 'ok') { Swal.fire('Éxito', resultado.mensaje, 'success'); } else { Swal.fire('Error', resultado.mensaje, 'error'); }
+        }).migrarTodasPasswordsSHA256();
+      }
+    });
+  }
+
+  function generarReporteConfiguracion() {
+    Swal.fire({ title: 'Generando reporte...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
+    google.script.run.withSuccessHandler((resultado) => {
+      Swal.close();
+      if (resultado.status === 'ok') { Swal.fire({ title: 'Reporte Generado', html: `Se ha creado el archivo: <strong>${resultado.nombreArchivo}</strong>`, icon: 'success' }); } else { Swal.fire('Error', resultado.mensaje, 'error'); }
+    }).generarReporteConfiguracionCompleta();
+  }
+  /* === EJECUTAR COPIA DE DOCUMENTO A CONTRASEÑA (TEXTO PLANO) === */
+  function ejecutarCopiaDocumentoAContraseñaPlano() {
+    Swal.fire({
+      title: '⚠️ ¿Está seguro?',
+      html: `
+      <div style="text-align: center;">
+        <i class="fas fa-exclamation-triangle" style="font-size: 48px; color: var(--color-orange-primary); margin-bottom: 15px;"></i>
+        <p>Esta acción <strong>reemplazará TODAS las contraseñas</strong> de los usuarios por su número de documento.</p>
+        <p style="font-size: 12px; color: #666;">Los usuarios podrán iniciar sesión usando su documento como contraseña.</p>
+        <p style="font-size: 12px; color: #666; margin-top: 10px;"><strong>Nota:</strong> Las contraseñas se guardarán en <strong>texto plano</strong>, sin encriptación.</p>
+        <p style="font-size: 12px; color: #666;">¿Desea continuar?</p>
+      </div>
+    `,
+      icon: 'warning',
+      showCancelButton: true,
+      confirmButtonText: 'Sí, ejecutar',
+      cancelButtonText: 'Cancelar',
+      confirmButtonColor: 'var(--color-orange-primary)'
+    }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({
+          title: '⏳ Procesando...',
+          html: 'Actualizando contraseñas, por favor espere...',
+          allowOutsideClick: false,
+          didOpen: () => Swal.showLoading()
+        });
+
+        google.script.run
+          .withSuccessHandler((respuesta) => {
+            Swal.close();
+            if (respuesta.status === 'ok') {
+              Swal.fire({
+                icon: 'success',
+                title: '✅ Proceso completado',
+                html: respuesta.mensaje,
+                confirmButtonText: 'Aceptar'
+              });
+            } else {
+              Swal.fire({
+                icon: 'error',
+                title: '❌ Error',
+                html: respuesta.mensaje,
+                confirmButtonText: 'Aceptar'
+              });
+            }
+          })
+          .withFailureHandler((error) => {
+            Swal.close();
+            Swal.fire({
+              icon: 'error',
+              title: '❌ Error de conexión',
+              html: error.message,
+              confirmButtonText: 'Aceptar'
+            });
+          })
+          .copiarDocumentoAContraseñaPlano();  // Llamada a la función del backend
+      }
+    });
+  }
+  /* === NUEVA FUNCIÓN PARA CREAR USUARIOS === */
+  function crearNuevoUsuario() {
+    Swal.fire({
+      title: '👤 Crear Nuevo Usuario',
+      html: `
+            <div style="text-align: left; max-height: 500px; overflow-y: auto; padding: 5px;">
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                    <input type="text" id="nuevoNombre" placeholder="Nombre completo" class="swal2-input">
+                    <input type="email" id="nuevoEmail" placeholder="Email institucional" class="swal2-input">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                    <input type="text" id="nuevoDocumento" placeholder="Documento de identidad" class="swal2-input">
+                    <input type="tel" id="nuevoTelefono" placeholder="Teléfono (opcional)" class="swal2-input">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px;">
+                    <select id="nuevoRol" class="swal2-input">
+                        <option value="DOCENTE">DOCENTE</option>
+                        <option value="JEFE DE AREA">JEFE DE AREA</option>
+                        <option value="ASISTENTE">ASISTENTE</option>
+                        <option value="DIRECTOR PREESCOLAR">DIRECTOR PREESCOLAR</option>
+                        <option value="ADMINISTRADOR GENERAL">ADMINISTRADOR GENERAL</option>
+                    </select>
+                    <select id="nuevoGenero" class="swal2-input">
+                        <option value="">Sin especificar</option>
+                        <option value="M">Masculino</option>
+                        <option value="F">Femenino</option>
+                    </select>
+                </div>
+                <div style="margin-bottom: 10px;">
+                    <input type="text" id="nuevoGrupo" placeholder="Grupo/Área (ej: Matemáticas, Ciencias)" class="swal2-input">
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 15px;">
+                    <input type="password" id="nuevaContraseña" placeholder="Contraseña" class="swal2-input">
+                    <input type="password" id="confirmarContraseña" placeholder="Confirmar contraseña" class="swal2-input">
+                </div>
+                <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin-bottom: 15px; border-left: 4px solid #6AB04C;">
+                    <p style="margin: 0; font-size: 12px; color: #666;">
+                        <i class="fas fa-info-circle"></i> El sistema generará un avatar automático basado en el nombre y género del usuario.
+                    </p>
+                </div>
+            </div>
+        `,
+      width: '550px',
+      showCancelButton: true,
+      confirmButtonText: '✅ Crear Usuario',
+      cancelButtonText: '❌ Cancelar',
+      preConfirm: () => {
+        const nombre = document.getElementById('nuevoNombre').value.trim();
+        const email = document.getElementById('nuevoEmail').value.trim();
+        const documento = document.getElementById('nuevoDocumento').value.trim();
+        const rol = document.getElementById('nuevoRol').value;
+        const grupo = document.getElementById('nuevoGrupo').value.trim();
+        const genero = document.getElementById('nuevoGenero').value;
+        const telefono = document.getElementById('nuevoTelefono').value.trim();
+        const contraseña = document.getElementById('nuevaContraseña').value;
+        const confirmarContraseña = document.getElementById('confirmarContraseña').value;
+
+        // Validaciones
+        if (!nombre) {
+          Swal.showValidationMessage('El nombre es obligatorio');
+          return false;
+        }
+        if (!email || !email.includes('@')) {
+          Swal.showValidationMessage('Email institucional inválido');
+          return false;
+        }
+        if (!documento) {
+          Swal.showValidationMessage('El documento es obligatorio');
+          return false;
+        }
+        if (!contraseña) {
+          Swal.showValidationMessage('La contraseña es obligatoria');
+          return false;
+        }
+        if (contraseña !== confirmarContraseña) {
+          Swal.showValidationMessage('Las contraseñas no coinciden');
+          return false;
+        }
+        if (contraseña.length < 6) {
+          Swal.showValidationMessage('La contraseña debe tener al menos 6 caracteres');
+          return false;
+        }
+
+        return {
+          nombre: nombre,
+          email: email,
+          documento: documento,
+          rol: rol,
+          grupo: grupo,
+          genero: genero,
+          telefono: telefono || '',
+          contraseña: contraseña
+        };
+      }
+    }).then((result) => {
+      if (result.isConfirmed) {
+        Swal.fire({
+          title: '⏳ Creando usuario...',
+          allowOutsideClick: false,
+          didOpen: () => {
+            Swal.showLoading();
+          }
+        });
+
+        google.script.run.withSuccessHandler((respuesta) => {
+          Swal.close();
+          if (respuesta.status === 'ok') {
+            Swal.fire({
+              icon: 'success',
+              title: '✅ Usuario creado exitosamente',
+              html: `
+                            <div style="text-align: left;">
+                                <p><strong>Usuario creado:</strong> ${respuesta.usuario.nombre}</p>
+                                <p><strong>Rol:</strong> ${respuesta.usuario.rol}</p>
+                                <p><strong>Email:</strong> ${respuesta.usuario.email}</p>
+                                <p><strong>Contraseña:</strong> ${result.value.contraseña}</p>
+                                <div style="background: #f8f9fa; padding: 10px; border-radius: 5px; margin-top: 10px;">
+                                    <p style="margin: 0; font-size: 12px; color: #666;">
+                                        <i class="fas fa-exclamation-triangle"></i> <strong>Importante:</strong> Anote la contraseña para proporcionarla al usuario.
+                                    </p>
+                                </div>
+                            </div>
+                        `,
+              confirmButtonText: 'Aceptar'
+            }).then(() => {
+              // Recargar la lista de usuarios
+              cargarUsuariosParaSelector();
+            });
+          } else {
+            Swal.fire('❌ Error', respuesta.mensaje || 'Error al crear usuario', 'error');
+          }
+        }).withFailureHandler((error) => {
+          Swal.close();
+          Swal.fire('❌ Error', 'Error de conexión: ' + error.message, 'error');
+        }).crearNuevoUsuarioBackend(result.value);
+      }
+    });
+  }
+
+
+</script>
