@@ -12,5 +12,16 @@ export default defineConfig({
         changeOrigin: true,
       }
     }
+  },
+  build: {
+    rollupOptions: {
+      output: {
+        manualChunks: {
+          charts: ['chart.js', 'react-chartjs-2'],
+          sweetalert2: ['sweetalert2'],
+          pdf: ['jspdf', 'jspdf-autotable'],
+        }
+      }
+    }
   }
 })
