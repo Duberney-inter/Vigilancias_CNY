@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { getZonas, getUsuarios, getRegistros, getLogs, createZona, createUsuario, deleteUsuario, setUsuarioActivo, setZonaActiva, updateZona, createLog, createComunicado, importUsuariosBulk, getHorarios, saveHorarios, updateUsuario, getComunicadosEnviados, downloadBackup, restoreBackup, purgeOldData } from '../lib/api';
+import { getZonas, getUsuarios, getRegistros, getLogs, createZona, createUsuario, deleteUsuario, setUsuarioActivo, setZonaActiva, updateZona, createLog, createComunicado, importUsuariosBulk, getHorarios, saveHorarios, updateUsuario, getComunicadosEnviados, downloadBackup, restoreBackup, purgeOldData, getConfig, updateConfig } from '../lib/api';
 import { QRCodeSVG } from 'qrcode.react';
 import { toPng } from 'html-to-image';
 import Swal from 'sweetalert2';
@@ -1063,6 +1063,59 @@ const DashboardAdmin = () => {
             title: 'Info del Sistema',
             html: '<p><b>App:</b> Vigilancia QR CNY v1.0.0</p>'
         });
+    };
+
+    const configureGpsSchedule = async () => {
+        let current = { gpsDesde: '06:00', gpsHasta: '18:00' };
+        try {
+            current = await getConfig();
+        } catch (e) {
+            console.error('Error cargando configuración de GPS:', e);
+        }
+
+        const { value: formValues } = await Swal.fire({
+            title: 'Horario de Rastreo GPS',
+            html: `
+                <div style="text-align: left;">
+                    <p style="font-size:13px; color:#555;">
+                        Fuera de este horario, los dispositivos de los docentes no envían su ubicación
+                        en vivo (ahorra batería) y no aparecerán en el mapa de supervisión.
+                    </p>
+                    <label style="font-weight:bold; font-size:13px; color:#555;">Desde:</label>
+                    <input id="swal-gps-desde" type="time" class="swal2-input" value="${current.gpsDesde}">
+
+                    <label style="font-weight:bold; font-size:13px; color:#555;">Hasta:</label>
+                    <input id="swal-gps-hasta" type="time" class="swal2-input" value="${current.gpsHasta}">
+                </div>
+            `,
+            focusConfirm: false,
+            showCancelButton: true,
+            confirmButtonText: 'Guardar',
+            cancelButtonText: 'Cancelar',
+            preConfirm: () => {
+                const gpsDesde = document.getElementById('swal-gps-desde').value;
+                const gpsHasta = document.getElementById('swal-gps-hasta').value;
+                if (!gpsDesde || !gpsHasta) {
+                    Swal.showValidationMessage('Por favor complete ambos horarios');
+                    return false;
+                }
+                if (gpsDesde >= gpsHasta) {
+                    Swal.showValidationMessage('La hora "Desde" debe ser anterior a la hora "Hasta"');
+                    return false;
+                }
+                return { gpsDesde, gpsHasta };
+            }
+        });
+
+        if (!formValues) return;
+
+        try {
+            await updateConfig(formValues.gpsDesde, formValues.gpsHasta);
+            await logAction(`Horario de rastreo GPS actualizado: ${formValues.gpsDesde}-${formValues.gpsHasta}`);
+            Swal.fire('Guardado', 'El horario de rastreo GPS fue actualizado.', 'success');
+        } catch (e) {
+            Swal.fire('Error', e.message || 'No se pudo actualizar el horario de rastreo GPS', 'error');
+        }
     };
 
     const fetchComunicadosEnviados = async () => {
@@ -3271,6 +3324,9 @@ const DashboardAdmin = () => {
                     </button>
                     <button className="btn btn-orange" onClick={showSecurityPolicies}>
                         <i className="fas fa-shield-alt"></i> Políticas de Seguridad
+                    </button>
+                    <button className="btn btn-institutional" onClick={configureGpsSchedule}>
+                        <i className="fas fa-satellite-dish"></i> Horario de Rastreo GPS
                     </button>
                     <button className="btn btn-green" onClick={runBackup}>
                         <i className="fas fa-download"></i> Backup completo

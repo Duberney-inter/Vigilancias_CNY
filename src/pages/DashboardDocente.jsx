@@ -3,7 +3,7 @@ import Swal from 'sweetalert2';
 import { useGeoLocation } from '../hooks/useGeoLocation';
 import { getDistance } from '../utils/geoUtils';
 import { schoolData } from '../config/schoolData';
-import { getZonas, getZona, getRegistros, createRegistro, createNovedad, createLog, getHorarios, updateUbicacionVivo, getComunicados, markComunicadoLeido, getEquipo } from '../lib/api';
+import { getZonas, getZona, getRegistros, createRegistro, createNovedad, createLog, getHorarios, updateUbicacionVivo, getComunicados, markComunicadoLeido, getEquipo, getConfig } from '../lib/api';
 
 import { useOfflineSync } from '../hooks/useOfflineSync';
 import { PaginationBar, slicePage } from '../components/PaginationBar';
@@ -13,6 +13,20 @@ const QRScanner = lazy(() => import('../components/QRScanner'));
 
 // Tolerancia GPS documentada en el README/backend: 50 metros del punto oficial de la zona.
 const MAX_DISTANCE_METERS = 50;
+
+// Franja horaria en la que se espera GPS activo (config. por el admin);
+// estos son solo el valor por defecto mientras carga la configuración real.
+const DEFAULT_GPS_WINDOW = { gpsDesde: '06:00', gpsHasta: '18:00' };
+
+const isWithinTimeWindow = (desde, hasta) => {
+    const now = new Date();
+    const currentMinutes = now.getHours() * 60 + now.getMinutes();
+    const [startH, startM] = String(desde).split(':').map(Number);
+    const [endH, endM] = String(hasta).split(':').map(Number);
+    const startMinutes = startH * 60 + startM;
+    const endMinutes = endH * 60 + endM;
+    return currentMinutes >= startMinutes && currentMinutes <= endMinutes;
+};
 
 const DashboardDocente = () => {
     const session = JSON.parse(localStorage.getItem('usuario_cny_2026'));
@@ -41,12 +55,22 @@ const DashboardDocente = () => {
     const [equipoPage, setEquipoPage] = useState(1);
     const location = useGeoLocation();
     const { saveToQueue, queueLength } = useOfflineSync('registros');
+    const [gpsWindow, setGpsWindow] = useState(DEFAULT_GPS_WINDOW);
+
+    useEffect(() => {
+        getConfig()
+            .then((cfg) => setGpsWindow({ gpsDesde: cfg.gpsDesde, gpsHasta: cfg.gpsHasta }))
+            .catch((err) => console.error('Error cargando horario de rastreo GPS:', err));
+    }, []);
 
     const lastUpdateRef = React.useRef(0);
 
     useEffect(() => {
         if (!user) return;
         if (!location.loaded || !location.coordinates.lat || !location.coordinates.lng) return;
+
+        // Fuera del horario configurado no se envía GPS (ahorra batería en el dispositivo).
+        if (!isWithinTimeWindow(gpsWindow.gpsDesde, gpsWindow.gpsHasta)) return;
 
         const now = Date.now();
         if (now - lastUpdateRef.current < 20000) { // 20s throttle
@@ -63,7 +87,7 @@ const DashboardDocente = () => {
         };
 
         sendLocation();
-    }, [location.coordinates.lat, location.coordinates.lng, location.loaded, user]);
+    }, [location.coordinates.lat, location.coordinates.lng, location.loaded, user, gpsWindow]);
 
     const fetchData = async () => {
         if (!user) return;
@@ -452,12 +476,23 @@ const DashboardDocente = () => {
                                 <small style="color: #888; text-transform: uppercase; font-weight: bold; font-size: 10px;">Hora</small>
                                 <div style="font-weight: 600;">${now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</div>
                             </div>
+                            <div>
+                                <small style="color: #888; text-transform: uppercase; font-weight: bold; font-size: 10px;">Tipo</small>
+                                <div style="font-weight: 600;">${zona.tipo || 'OTRO'}</div>
+                            </div>
+                            <div>
+                                <small style="color: #888; text-transform: uppercase; font-weight: bold; font-size: 10px;">Horario Permitido</small>
+                                <div style="font-weight: 600;">${zona.horario || 'N/A'}</div>
+                            </div>
                         </div>
-                        <div style="background: #f8f9fa; padding: 12px; border-radius: 8px;">
+                        <div style="background: #f8f9fa; padding: 12px; border-radius: 8px; margin-bottom: 12px;">
                             <small style="color: #888; text-transform: uppercase; font-weight: bold; font-size: 10px;">Actividad Asignada</small>
                             <div style="font-size: 13px; color: #444; margin-top: 5px; line-height: 1.4;">
                                 ${zona.actividad || 'Vigilancia y control de área escolar.'}
                             </div>
+                        </div>
+                        <div style="font-size: 11px; color: #27ae60; font-weight: 600;">
+                            <i class="fas fa-check-circle"></i> Ubicación capturada a ${Math.round(distance)}m del punto oficial
                         </div>
                     </div>
                 `,

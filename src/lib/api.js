@@ -86,6 +86,22 @@ export async function forgotPassword(documento, email, newPassword) {
     return handleResponse(res);
 }
 
+// ---------- Configuración ----------
+
+export async function getConfig() {
+    const res = await fetch(`${API_BASE}/config`, { headers: authHeaders() });
+    return handleResponse(res);
+}
+
+export async function updateConfig(gpsDesde, gpsHasta) {
+    const res = await fetch(`${API_BASE}/config`, {
+        method: 'PUT',
+        headers: authHeaders(),
+        body: JSON.stringify({ gpsDesde, gpsHasta })
+    });
+    return handleResponse(res);
+}
+
 // ---------- Usuarios ----------
 
 export async function getUsuarios() {

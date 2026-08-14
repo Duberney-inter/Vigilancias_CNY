@@ -15,6 +15,12 @@ const getTeacherColor = (name) => {
 
 const ZONE_RADIUS_M = 50;
 const MAP_DEFAULT_CENTER = [4.8029538364668145, -74.04472357063082];
+// Si un docente no envía su GPS en este lapso (apagó la ubicación, cerró la
+// app, etc.), deja de considerarse "en vivo" y desaparece del mapa.
+const GPS_FRESH_WINDOW_MS = 2 * 60 * 1000;
+
+const isGpsFresh = (actualizadoGps) =>
+    Boolean(actualizadoGps) && (Date.now() - new Date(actualizadoGps).getTime() < GPS_FRESH_WINDOW_MS);
 
 /**
  * Supervisión en vivo o historial de vigilancias.
@@ -228,7 +234,8 @@ const LiveSupervision = ({
                 (u.rol === 'DOCENTE' || u.rol === 'JEFE DE AREA') &&
                 u.latitud_actual && u.longitud_actual &&
                 parseFloat(u.latitud_actual) !== 0 &&
-                parseFloat(u.longitud_actual) !== 0
+                parseFloat(u.longitud_actual) !== 0 &&
+                isGpsFresh(u.actualizado_gps)
             );
 
             let filteredLiveTeachers = liveTeachers;
@@ -260,7 +267,7 @@ const LiveSupervision = ({
                 const initials = u.nombre
                     ? u.nombre.split(' ').filter(Boolean).map((n) => n[0]).slice(0, 2).join('').toUpperCase()
                     : '??';
-                const isFresh = u.actualizado_gps && (Date.now() - new Date(u.actualizado_gps).getTime() < 15 * 60 * 1000);
+                const isFresh = isGpsFresh(u.actualizado_gps);
                 const statusColor = isFresh ? '#2ecc71' : '#95a5a6';
                 const statusLabel = isFresh ? 'EN VIVO' : 'ÚLTIMA UBICACIÓN';
                 const timeStr = u.actualizado_gps
@@ -367,7 +374,9 @@ const LiveSupervision = ({
     const teachersList = users.filter((u) => u.rol === 'DOCENTE' || u.rol === 'JEFE DE AREA');
     const teacherUbicaciones = [];
     teachersList.forEach((t) => {
-        const hasLiveGPS = t.latitud_actual && t.longitud_actual && parseFloat(t.latitud_actual) !== 0 && parseFloat(t.longitud_actual) !== 0;
+        const hasLiveGPS = t.latitud_actual && t.longitud_actual
+            && parseFloat(t.latitud_actual) !== 0 && parseFloat(t.longitud_actual) !== 0
+            && isGpsFresh(t.actualizado_gps);
         const latestScan = registros.find((r) => r.usuarioNombre === t.nombre);
 
         if (selectedZoneFilter) {
@@ -381,7 +390,6 @@ const LiveSupervision = ({
         }
 
         if (hasLiveGPS) {
-            const isFresh = t.actualizado_gps && (Date.now() - new Date(t.actualizado_gps).getTime() < 15 * 60 * 1000);
             teacherUbicaciones.push({
                 id: 'live-' + t.documento,
                 nombre: t.nombre,
@@ -389,8 +397,8 @@ const LiveSupervision = ({
                 longitud: parseFloat(t.longitud_actual),
                 timestamp: t.actualizado_gps,
                 isLive: true,
-                isFresh,
-                labelText: isFresh ? 'Ubicación GPS (Activo)' : 'Ubicación GPS (Inactivo)',
+                isFresh: true,
+                labelText: 'Ubicación GPS (Activo)',
                 timeAgoStr: t.actualizado_gps
                     ? new Date(t.actualizado_gps).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                     : 'N/A'
