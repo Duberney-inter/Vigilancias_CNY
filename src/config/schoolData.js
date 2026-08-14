@@ -8,8 +8,8 @@ export const schoolData = {
         background: "#F8F9FA"
     },
     gps: {
-        lat: 4.7110, // Default institutional latitude
-        lng: -74.0721, // Default institutional longitude
-        radius: 50 // Allowed radius in meters
+        lat: 4.8022371, // Colegio Nueva York, Calle 227 #49-64, Bogotá
+        lng: -74.044827,
+        radius: 100 // Tolerancia general del colegio, en metros
     }
 };

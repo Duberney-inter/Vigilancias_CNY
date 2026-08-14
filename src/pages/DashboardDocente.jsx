@@ -2,6 +2,7 @@ import React, { useState, useEffect, Suspense, lazy } from 'react';
 import Swal from 'sweetalert2';
 import { useGeoLocation } from '../hooks/useGeoLocation';
 import { getDistance } from '../utils/geoUtils';
+import { schoolData } from '../config/schoolData';
 import { getZonas, getZona, getRegistros, createRegistro, createNovedad, createLog, getHorarios, updateUbicacionVivo, getComunicados, markComunicadoLeido, getEquipo } from '../lib/api';
 
 import { useOfflineSync } from '../hooks/useOfflineSync';
@@ -376,6 +377,18 @@ const DashboardDocente = () => {
 
             if (!location.coordinates || !location.coordinates.lat) {
                 Swal.fire('Error GPS', 'Los datos de ubicación no son válidos. Por favor reinicie la aplicación.', 'error');
+                return;
+            }
+
+            const schoolDistance = getDistance(
+                location.coordinates.lat,
+                location.coordinates.lng,
+                schoolData.gps.lat,
+                schoolData.gps.lng
+            );
+
+            if (schoolDistance > schoolData.gps.radius) {
+                Swal.fire('Fuera del Colegio', `Estás a ${Math.round(schoolDistance)}m de ${schoolData.name}. Debes estar dentro de ${schoolData.gps.radius}m del colegio para registrar.`, 'error');
                 return;
             }
 
