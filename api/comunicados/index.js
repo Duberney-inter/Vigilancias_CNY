@@ -1,7 +1,7 @@
-import { query } from '../lib/db.js';
-import { handleCors, requireAuth, requireRole, ADMIN_ROLE, DIRECTOR_ROLE, isSupervisorRole } from '../lib/auth.js';
+import { query } from '../_lib/db.js';
+import { handleCors, requireAuth, requireRole, ADMIN_ROLE, DIRECTOR_ROLE, isSupervisorRole } from '../_lib/auth.js';
 import nodemailer from 'nodemailer';
-import { insertLogFromToken } from '../lib/audit.js';
+import { insertLogFromToken } from '../_lib/audit.js';
 
 const COMMUNICATION_READER_ROLES = [
     ADMIN_ROLE,

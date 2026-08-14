@@ -6,8 +6,8 @@ if (!process.env.USE_LOCAL_DB) {
     process.env.USE_LOCAL_DB = 'true';
 }
 
-const { query } = await import('../api/lib/db.js');
-const { ensureZonaActivoColumn } = await import('../api/lib/ensureZonaActivo.js');
+const { query } = await import('../api/_lib/db.js');
+const { ensureZonaActivoColumn } = await import('../api/_lib/ensureZonaActivo.js');
 
 await ensureZonaActivoColumn(query);
 

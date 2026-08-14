@@ -7,8 +7,8 @@ process.env.USE_LOCAL_DB = 'false';
 async function testLogin(user, password) {
     try {
         console.log(`🔑 Probando login para el usuario "${user}" contra Neon...`);
-        const { query } = await import('../api/lib/db.js');
-        const { validatePassword, createToken } = await import('../api/lib/auth.js');
+        const { query } = await import('../api/_lib/db.js');
+        const { validatePassword, createToken } = await import('../api/_lib/auth.js');
 
         const cleanUser = user.trim();
         const cleanPass = password.trim();

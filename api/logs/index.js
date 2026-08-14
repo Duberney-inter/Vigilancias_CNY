@@ -1,6 +1,6 @@
-import { query } from '../lib/db.js';
-import { handleCors, requireAuth, requireRole, ADMIN_ROLE } from '../lib/auth.js';
-import { insertLogFromToken } from '../lib/audit.js';
+import { query } from '../_lib/db.js';
+import { handleCors, requireAuth, requireRole, ADMIN_ROLE } from '../_lib/auth.js';
+import { insertLogFromToken } from '../_lib/audit.js';
 
 export default async function handler(req, res) {
     if (handleCors(req, res)) return;

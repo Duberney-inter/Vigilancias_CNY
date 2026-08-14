@@ -1,7 +1,7 @@
-import { query } from '../lib/db.js';
-import { handleCors, requireAuth, requireRole, ADMIN_ROLE } from '../lib/auth.js';
-import { insertLogFromToken } from '../lib/audit.js';
-import { retentionCutoffIso, RETENTION_YEARS } from '../lib/retention.js';
+import { query } from '../_lib/db.js';
+import { handleCors, requireAuth, requireRole, ADMIN_ROLE } from '../_lib/auth.js';
+import { insertLogFromToken } from '../_lib/audit.js';
+import { retentionCutoffIso, RETENTION_YEARS } from '../_lib/retention.js';
 
 function deletedCount(result) {
     return result.rowCount ?? result.rows?.length ?? 0;

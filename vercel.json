@@ -1,5 +1,8 @@
 {
   "rewrites": [
+    { "source": "/api/auth/:action", "destination": "/api/auth?action=:action" },
+    { "source": "/api/usuarios/:id", "destination": "/api/usuarios?id=:id" },
+    { "source": "/api/zonas/:id", "destination": "/api/zonas?id=:id" },
     { "source": "/api/(.*)", "destination": "/api/$1" },
     { "source": "/(.*)", "destination": "/index.html" }
   ],

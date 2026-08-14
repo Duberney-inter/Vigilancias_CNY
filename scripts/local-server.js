@@ -12,6 +12,15 @@ const __dirname = dirname(__filename);
 const API_DIR = join(__dirname, '..', 'api');
 const PORT = 3001;
 
+// Rutas consolidadas (para caber en el límite de 12 funciones serverless del
+// plan Hobby de Vercel): mapea sub-rutas tipo /auth/login o /usuarios/:id al
+// mismo handler, replicando las reescrituras de vercel.json en local dev.
+const PARAM_ALIASES = {
+    '/auth': 'action',
+    '/usuarios': 'id',
+    '/zonas': 'id',
+};
+
 const app = express();
 app.use(cors());
 app.use(express.json({ limit: '15mb' }));
@@ -61,7 +70,7 @@ async function registerRoutes(dir) {
                     // Support both /api/path and /path
                     const fullRoute = `/api${route === '/' ? '' : route}`;
 
-                    app.all([route, fullRoute], async (req, res) => {
+                    const wrappedHandler = async (req, res) => {
                         try {
                             await handler(req, res);
                         } catch (err) {
@@ -70,7 +79,19 @@ async function registerRoutes(dir) {
                                 res.status(500).json({ error: 'Internal Server Error', message: err.message });
                             }
                         }
-                    });
+                    };
+
+                    app.all([route, fullRoute], wrappedHandler);
+
+                    const paramField = PARAM_ALIASES[route];
+                    if (paramField) {
+                        const paramRoute = `${route}/:${paramField}`;
+                        const fullParamRoute = `/api${paramRoute}`;
+                        app.all([paramRoute, fullParamRoute], (req, res) => {
+                            req.query[paramField] = req.params[paramField];
+                            return wrappedHandler(req, res);
+                        });
+                    }
                 }
             } catch (err) {
                 console.error(`Failed to register route ${route}:`, err);
@@ -81,9 +102,9 @@ async function registerRoutes(dir) {
 
 async function start() {
     // Esperar DB lista antes de aceptar tráfico (evita 404/errores por API a medias).
-    const { query } = await import('../api/lib/db.js');
+    const { query } = await import('../api/_lib/db.js');
     await query('SELECT 1');
-    const { ensureZonaActivoColumn } = await import('../api/lib/ensureZonaActivo.js');
+    const { ensureZonaActivoColumn } = await import('../api/_lib/ensureZonaActivo.js');
     await ensureZonaActivoColumn(query);
     console.log('[API] Base de datos lista para recibir peticiones.');
 

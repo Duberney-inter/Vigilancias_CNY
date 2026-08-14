@@ -1,5 +1,5 @@
-import { query } from '../lib/db.js';
-import { handleCors, requireAuth, requireRole } from '../lib/auth.js';
+import { query } from '../_lib/db.js';
+import { handleCors, requireAuth, requireRole } from '../_lib/auth.js';
 
 const JEFE_ROLE = 'JEFE DE AREA';
 

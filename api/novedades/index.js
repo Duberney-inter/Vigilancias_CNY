@@ -1,7 +1,7 @@
-import { query } from '../lib/db.js';
-import { handleCors, requireAuth, isSupervisorRole, requireRole } from '../lib/auth.js';
+import { query } from '../_lib/db.js';
+import { handleCors, requireAuth, isSupervisorRole, requireRole } from '../_lib/auth.js';
 import { put } from '@vercel/blob';
-import { insertLogFromToken } from '../lib/audit.js';
+import { insertLogFromToken } from '../_lib/audit.js';
 
 const OPERATIVE_ROLES = ['DOCENTE', 'JEFE DE AREA'];
 

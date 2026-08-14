@@ -1,6 +1,6 @@
-import { query } from '../lib/db.js';
-import { handleCors, requireAuth, ADMIN_ROLE, DIRECTOR_ROLE, ASISTENTE_ROLE, requireRole } from '../lib/auth.js';
-import { insertLogFromToken } from '../lib/audit.js';
+import { query } from '../_lib/db.js';
+import { handleCors, requireAuth, ADMIN_ROLE, DIRECTOR_ROLE, ASISTENTE_ROLE, requireRole } from '../_lib/auth.js';
+import { insertLogFromToken } from '../_lib/audit.js';
 
 const PRIVILEGED_ROLES = [ADMIN_ROLE, DIRECTOR_ROLE, ASISTENTE_ROLE];
 const OPERATIVE_ROLES = ['DOCENTE', 'JEFE DE AREA'];
