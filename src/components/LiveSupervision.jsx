@@ -14,6 +14,7 @@ const getTeacherColor = (name) => {
 };
 
 const ZONE_RADIUS_M = 50;
+const MAP_DEFAULT_CENTER = [4.80087, -74.04595];
 
 /**
  * Supervisión en vivo o historial de vigilancias.
@@ -37,6 +38,7 @@ const LiveSupervision = ({
     const [fechaDesde, setFechaDesde] = useState('');
     const [fechaHasta, setFechaHasta] = useState('');
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
 
     const resolveSelectedZone = () => {
         if (selectedMapZone === 'ALL') return null;
@@ -61,6 +63,7 @@ const LiveSupervision = ({
     const activeLayersRef = useRef([]);
     const lastFiltersRef = useRef('');
     const shouldFitRef = useRef(true);
+    const didInitialCenterRef = useRef(false);
 
     const fetchData = async () => {
         try {
@@ -85,6 +88,15 @@ const LiveSupervision = ({
         const interval = setInterval(fetchData, refreshMs);
         return () => clearInterval(interval);
     }, [refreshMs, isLiveMode]);
+
+    const handleManualRefresh = async () => {
+        setRefreshing(true);
+        try {
+            await fetchData();
+        } finally {
+            setRefreshing(false);
+        }
+    };
 
     useEffect(() => {
         setMapTimeframe(isLiveMode ? 'today' : 'all');
@@ -122,6 +134,15 @@ const LiveSupervision = ({
                 L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
                     attribution: '&copy; OpenStreetMap contributors'
                 }).addTo(map);
+            }
+
+            if (!didInitialCenterRef.current) {
+                map.setView(MAP_DEFAULT_CENTER, 17);
+                didInitialCenterRef.current = true;
+                shouldFitRef.current = false;
+                // Evita que el chequeo de "cambio de filtros" de más abajo
+                // reactive el auto-encuadre en esta misma pasada inicial.
+                lastFiltersRef.current = `${selectedMapTeacher}-${selectedMapZone}-${mapTimeframe}`;
             }
 
             if (activeLayersRef.current) {
@@ -507,7 +528,33 @@ const LiveSupervision = ({
                 <div className="card map-panel" style={{ textAlign: 'left' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                         <h3 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '16px', fontWeight: 'bold' }}>🌎 Mapa del Campus y Rondas</h3>
-                        <small style={{ color: '#888' }}><i className="fas fa-satellite"></i> Actualización cada {Math.round(refreshMs / 1000)}s</small>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                            <small style={{ color: '#888' }}><i className="fas fa-satellite"></i> Actualización cada {Math.round(refreshMs / 1000)}s</small>
+                            <button
+                                type="button"
+                                onClick={handleManualRefresh}
+                                disabled={refreshing}
+                                title="Refrescar ahora"
+                                style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '6px',
+                                    padding: '6px 10px',
+                                    fontSize: '11px',
+                                    fontWeight: 'bold',
+                                    borderRadius: '8px',
+                                    border: '1px solid #e2e8f0',
+                                    background: refreshing ? '#f1f5f9' : '#ffffff',
+                                    color: 'var(--color-blue-dark)',
+                                    cursor: refreshing ? 'default' : 'pointer',
+                                    margin: 0,
+                                    width: 'auto'
+                                }}
+                            >
+                                <i className={`fas fa-sync-alt ${refreshing ? 'fa-spin' : ''}`}></i>
+                                {refreshing ? 'Actualizando...' : 'Refrescar'}
+                            </button>
+                        </div>
                     </div>
                     <div id={mapId} className="map-panel-canvas"></div>
                 </div>
