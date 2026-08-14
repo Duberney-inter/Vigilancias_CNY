@@ -137,7 +137,7 @@ const LiveSupervision = ({
             }
 
             if (!didInitialCenterRef.current) {
-                map.setView(MAP_DEFAULT_CENTER, 17);
+                map.setView(MAP_DEFAULT_CENTER, 19);
                 didInitialCenterRef.current = true;
                 shouldFitRef.current = false;
                 // Evita que el chequeo de "cambio de filtros" de más abajo

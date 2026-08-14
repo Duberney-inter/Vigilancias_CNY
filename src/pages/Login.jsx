@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Swal from 'sweetalert2';
 import Header from '../components/Header';
-import { login } from '../lib/api';
+import { login, forgotPassword } from '../lib/api';
 
 const Login = () => {
     const [user, setUser] = useState('');
@@ -79,6 +79,77 @@ const Login = () => {
         }
     };
 
+    const handleForgotPassword = async () => {
+        const { value: formValues } = await Swal.fire({
+            title: 'Recuperar Contraseña',
+            html: `
+                <div style="text-align: left;">
+                    <label style="font-weight:bold; font-size:13px; color:#555;">Documento:</label>
+                    <input id="swal-fp-doc" class="swal2-input" placeholder="Número de documento">
+
+                    <label style="font-weight:bold; font-size:13px; color:#555;">Correo registrado:</label>
+                    <input id="swal-fp-email" type="email" class="swal2-input" placeholder="correo@colegio.edu.co">
+
+                    <label style="font-weight:bold; font-size:13px; color:#555;">Nueva contraseña:</label>
+                    <input id="swal-fp-pass" type="password" class="swal2-input" placeholder="Mínimo 6 caracteres">
+
+                    <label style="font-weight:bold; font-size:13px; color:#555;">Confirmar contraseña:</label>
+                    <input id="swal-fp-pass2" type="password" class="swal2-input" placeholder="Repita la contraseña">
+                </div>
+            `,
+            focusConfirm: false,
+            showCancelButton: true,
+            confirmButtonText: 'Cambiar Contraseña',
+            cancelButtonText: 'Cancelar',
+            confirmButtonColor: '#6AB04C',
+            preConfirm: () => {
+                const documento = document.getElementById('swal-fp-doc').value.trim();
+                const email = document.getElementById('swal-fp-email').value.trim();
+                const newPassword = document.getElementById('swal-fp-pass').value;
+                const confirmPassword = document.getElementById('swal-fp-pass2').value;
+
+                if (!documento || !email || !newPassword || !confirmPassword) {
+                    Swal.showValidationMessage('Por favor complete todos los campos');
+                    return false;
+                }
+                if (newPassword.length < 6) {
+                    Swal.showValidationMessage('La contraseña debe tener al menos 6 caracteres');
+                    return false;
+                }
+                if (newPassword !== confirmPassword) {
+                    Swal.showValidationMessage('Las contraseñas no coinciden');
+                    return false;
+                }
+
+                return { documento, email, newPassword };
+            }
+        });
+
+        if (!formValues) return;
+
+        try {
+            await forgotPassword(formValues.documento, formValues.email, formValues.newPassword);
+            Swal.fire({
+                icon: 'success',
+                title: 'Contraseña actualizada',
+                text: 'Ya puede iniciar sesión con su nueva contraseña.',
+                confirmButtonColor: '#6AB04C'
+            });
+        } catch (error) {
+            let message = 'No se pudo actualizar la contraseña';
+            if (error.code === 'identity-mismatch') message = 'El documento y el correo no coinciden con ningún usuario registrado';
+            else if (error.code === 'account-inactive') message = 'Su cuenta está inactiva. Contacte al administrador.';
+            else if (error.message) message = error.message;
+
+            Swal.fire({
+                icon: 'error',
+                title: 'Error',
+                text: message,
+                confirmButtonColor: '#E74C3C'
+            });
+        }
+    };
+
     return (
         <div className="login-card">
             <Header />
@@ -115,9 +186,24 @@ const Login = () => {
                     )}
                 </button>
             </form>
-            <a href="https://wa.me/573506224730" style={{ fontSize: '12px', color: 'var(--text-light)', display: 'block', marginTop: '10px' }}>
+            <button
+                type="button"
+                onClick={handleForgotPassword}
+                style={{
+                    fontSize: '12px',
+                    color: 'var(--text-light)',
+                    display: 'block',
+                    marginTop: '10px',
+                    background: 'none',
+                    border: 'none',
+                    padding: 0,
+                    textDecoration: 'underline',
+                    cursor: 'pointer',
+                    width: 'auto'
+                }}
+            >
                 ¿Olvidó su contraseña?
-            </a>
+            </button>
             <div style={{ marginTop: '15px', fontSize: '12px', color: 'var(--text-light)' }}>
                 SISTEMA DE CONTROL DE VIGILANCIAS CNY PREESCOLAR © 2026
             </div>

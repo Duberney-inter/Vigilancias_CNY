@@ -77,6 +77,15 @@ export async function changePassword(newPassword, documento, currentPassword) {
     return handleResponse(res);
 }
 
+export async function forgotPassword(documento, email, newPassword) {
+    const res = await fetch(`${API_BASE}/auth/forgot-password`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ documento, email, newPassword })
+    });
+    return handleResponse(res);
+}
+
 // ---------- Usuarios ----------
 
 export async function getUsuarios() {

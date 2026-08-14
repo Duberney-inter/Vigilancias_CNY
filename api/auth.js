@@ -233,6 +233,97 @@ async function handlePassword(req, res) {
     }
 }
 
+async function handleForgotPassword(req, res) {
+    if (req.method !== 'POST') {
+        return res.status(405).json({ error: 'Method not allowed' });
+    }
+
+    try {
+        const { documento, email, newPassword } = req.body;
+
+        const cleanDocumento = String(documento || '').trim();
+        const cleanEmail = String(email || '').trim().toLowerCase();
+
+        if (!cleanDocumento || !cleanEmail) {
+            return res.status(400).json({
+                error: 'missing-fields',
+                message: 'Documento y correo son obligatorios'
+            });
+        }
+
+        if (!newPassword || newPassword.length < 6) {
+            return res.status(400).json({
+                error: 'invalid-password',
+                message: 'La contraseña debe tener al menos 6 caracteres'
+            });
+        }
+
+        const { rows } = await query(
+            'SELECT documento, nombre, email, activo FROM usuarios WHERE documento = $1 LIMIT 1',
+            [cleanDocumento]
+        );
+        const userData = rows[0];
+
+        // Mensaje genérico e igual en todos los casos para no revelar si el documento existe.
+        const identityMismatch = async () => {
+            await insertLog({
+                usuario: userData?.nombre || 'Desconocido',
+                documento: cleanDocumento,
+                accion: 'Intento fallido de restablecimiento de contraseña (documento/correo no coinciden)'
+            });
+            return res.status(400).json({
+                error: 'identity-mismatch',
+                message: 'El documento y el correo no coinciden con ningún usuario registrado'
+            });
+        };
+
+        if (!userData) {
+            return identityMismatch();
+        }
+
+        const storedEmail = String(userData.email || '').trim().toLowerCase();
+        if (!storedEmail || storedEmail !== cleanEmail) {
+            return identityMismatch();
+        }
+
+        const isActive = !(
+            userData.activo === false
+            || userData.activo === 0
+            || userData.activo === '0'
+            || userData.activo === 'f'
+            || userData.activo === 'false'
+            || userData.activo === 'FALSE'
+        );
+        if (!isActive) {
+            return res.status(403).json({
+                error: 'account-inactive',
+                message: 'Su cuenta está inactiva. Contacte al administrador.'
+            });
+        }
+
+        const newHash = hashPassword(newPassword);
+        await query(
+            'UPDATE usuarios SET password = $1, "updatedAt" = NOW() WHERE documento = $2',
+            [newHash, cleanDocumento]
+        );
+
+        await insertLog({
+            usuario: userData.nombre,
+            documento: cleanDocumento,
+            accion: 'Restablecimiento de contraseña (autoservicio, sin sesión)'
+        });
+
+        return res.status(200).json({ message: 'Contraseña actualizada correctamente' });
+
+    } catch (error) {
+        console.error('Forgot password error:', error);
+        return res.status(500).json({
+            error: 'server-error',
+            message: 'Error interno del servidor. Intente nuevamente más tarde.'
+        });
+    }
+}
+
 export default async function handler(req, res) {
     if (handleCors(req, res)) return;
 
@@ -241,6 +332,7 @@ export default async function handler(req, res) {
     if (action === 'login') return handleLogin(req, res);
     if (action === 'me') return handleMe(req, res);
     if (action === 'password') return handlePassword(req, res);
+    if (action === 'forgot-password') return handleForgotPassword(req, res);
 
     return res.status(404).json({ error: 'Not found' });
 }

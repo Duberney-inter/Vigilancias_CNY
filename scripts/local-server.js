@@ -88,7 +88,13 @@ async function registerRoutes(dir) {
                         const paramRoute = `${route}/:${paramField}`;
                         const fullParamRoute = `/api${paramRoute}`;
                         app.all([paramRoute, fullParamRoute], (req, res) => {
-                            req.query[paramField] = req.params[paramField];
+                            // Express 5: req.query es un getter de solo lectura que se
+                            // recalcula desde req.url, así que hay que reescribir la URL
+                            // (no basta con asignar req.query[...] = ...).
+                            const [pathPart, queryPart] = req.url.split('?');
+                            const params = new URLSearchParams(queryPart || '');
+                            params.set(paramField, req.params[paramField]);
+                            req.url = `${pathPart}?${params.toString()}`;
                             return wrappedHandler(req, res);
                         });
                     }
