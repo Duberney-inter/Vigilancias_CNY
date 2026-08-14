@@ -14,7 +14,7 @@ const getTeacherColor = (name) => {
 };
 
 const ZONE_RADIUS_M = 50;
-const MAP_DEFAULT_CENTER = [4.80087, -74.04595];
+const MAP_DEFAULT_CENTER = [4.8029538364668145, -74.04472357063082];
 
 /**
  * Supervisión en vivo o historial de vigilancias.
