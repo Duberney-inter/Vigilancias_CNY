@@ -21,12 +21,99 @@ async function loadSeedUsuarios() {
     }
 }
 
+// Mismo esquema que bootstrapLocalSchema() (PGlite), para que un Neon nuevo
+// también quede completo desde el primer arranque, sin depender de que cada
+// endpoint cree su propia tabla por separado.
+const CREATE_TABLE_QUERIES = [
+    `CREATE TABLE IF NOT EXISTS usuarios (
+        documento TEXT PRIMARY KEY,
+        nombre TEXT,
+        rol TEXT,
+        grupo TEXT,
+        "grupoArea" TEXT,
+        area TEXT,
+        email TEXT,
+        password TEXT,
+        "fotoURL" TEXT,
+        activo BOOLEAN DEFAULT TRUE,
+        "createdAt" TIMESTAMP DEFAULT NOW(),
+        "updatedAt" TIMESTAMP DEFAULT NOW()
+    );`,
+    `CREATE TABLE IF NOT EXISTS zonas (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        alias TEXT UNIQUE,
+        nombre TEXT,
+        latitud DOUBLE PRECISION,
+        longitud DOUBLE PRECISION,
+        horario TEXT,
+        tipo TEXT,
+        actividad TEXT,
+        activo BOOLEAN DEFAULT TRUE,
+        "createdAt" TIMESTAMP DEFAULT NOW(),
+        "updatedAt" TIMESTAMP DEFAULT NOW()
+    );`,
+    `CREATE TABLE IF NOT EXISTS registros (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "zonaId" TEXT,
+        "zonaAlias" TEXT,
+        "usuarioId" TEXT,
+        "usuarioNombre" TEXT,
+        timestamp TEXT,
+        latitud DOUBLE PRECISION,
+        longitud DOUBLE PRECISION,
+        distancia DOUBLE PRECISION,
+        "syncedAt" TIMESTAMP DEFAULT NOW()
+    );`,
+    `CREATE TABLE IF NOT EXISTS novedades (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        detalle TEXT,
+        "mediaUrl" TEXT,
+        "usuarioId" TEXT,
+        "usuarioNombre" TEXT,
+        area TEXT,
+        tipo TEXT,
+        timestamp TIMESTAMP DEFAULT NOW()
+    );`,
+    `CREATE TABLE IF NOT EXISTS comunicados (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        mensaje TEXT,
+        emisor TEXT,
+        destinatario TEXT,
+        emisor_documento TEXT,
+        emisor_rol TEXT,
+        timestamp TIMESTAMP DEFAULT NOW()
+    );`,
+    `CREATE TABLE IF NOT EXISTS comunicado_lecturas (
+        comunicado_id UUID NOT NULL REFERENCES comunicados(id) ON DELETE CASCADE,
+        usuario_documento TEXT NOT NULL,
+        leido_en TIMESTAMP DEFAULT NOW(),
+        PRIMARY KEY (comunicado_id, usuario_documento)
+    );`,
+    `CREATE TABLE IF NOT EXISTS logs (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        usuario TEXT,
+        documento TEXT,
+        accion TEXT,
+        timestamp TIMESTAMP DEFAULT NOW()
+    );`,
+    `CREATE TABLE IF NOT EXISTS horarios (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        "usuarioId" TEXT,
+        "zonaId" TEXT,
+        "diaCiclo" INTEGER,
+        "createdAt" TIMESTAMP DEFAULT NOW(),
+        UNIQUE ("usuarioId", "diaCiclo")
+    );`
+];
+
 const ALTER_QUERIES = [
     'ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS latitud_actual DOUBLE PRECISION;',
     'ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS longitud_actual DOUBLE PRECISION;',
     'ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS actualizado_gps TIMESTAMP;',
     'ALTER TABLE usuarios ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE;',
     'ALTER TABLE zonas ADD COLUMN IF NOT EXISTS activo BOOLEAN DEFAULT TRUE;',
+    'ALTER TABLE comunicados ADD COLUMN IF NOT EXISTS emisor_documento TEXT;',
+    'ALTER TABLE comunicados ADD COLUMN IF NOT EXISTS emisor_rol TEXT;',
     'UPDATE zonas SET activo = TRUE WHERE activo IS NULL;'
 ];
 
@@ -230,12 +317,15 @@ if (isLocalDb) {
 
     dbReady = (async () => {
         try {
+            for (const q of CREATE_TABLE_QUERIES) {
+                await pool.query(q);
+            }
             for (const q of ALTER_QUERIES) {
                 await pool.query(q);
             }
-            console.log('[DB] Columnas de geolocalización en vivo validadas en Neon.');
+            console.log('[DB] Esquema y columnas de geolocalización en vivo validados en Neon.');
         } catch (err) {
-            console.error('[DB] Error al validar columnas de geolocalización en Neon:', err);
+            console.error('[DB] Error al validar el esquema en Neon:', err);
             throw err;
         }
     })();
