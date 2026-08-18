@@ -63,6 +63,15 @@ const DashboardDocente = () => {
             .catch((err) => console.error('Error cargando horario de rastreo GPS:', err));
     }, []);
 
+    // Precarga las zonas en memoria apenas hay sesión (no solo al abrir "Historial"),
+    // para poder identificar la zona escaneada aunque luego se pierda la conexión.
+    useEffect(() => {
+        if (!user) return;
+        getZonas()
+            .then(setZones)
+            .catch((err) => console.error('Error precargando zonas:', err));
+    }, [user?.documento, user?.uid]);
+
     const lastUpdateRef = React.useRef(0);
 
     useEffect(() => {
@@ -293,19 +302,34 @@ const DashboardDocente = () => {
             const searchTerm = input.trim().toUpperCase();
             let zona = null;
             let zoneId = '';
+            const isOnline = navigator.onLine;
 
-            // 1. Try precise ID or alias lookup via API
-            try {
-                const zoneData = await getZona(input.trim());
-                zona = zoneData;
-                zoneId = zoneData.id;
-            } catch {
-                // Not found by ID, continue to search
+            // 1. Try precise ID or alias lookup via API (solo si hay conexión;
+            // sin internet, getZona()/getZonas() lanzarían y nunca llegaríamos
+            // a guardar el registro en la cola offline más abajo).
+            if (isOnline) {
+                try {
+                    const zoneData = await getZona(input.trim());
+                    zona = zoneData;
+                    zoneId = zoneData.id;
+                } catch {
+                    // Not found by ID, continue to search
+                }
             }
 
-            // 2. If not found, search through all zones
+            // 2. If not found, search through all zones (en memoria si no hay
+            // conexión, usando las zonas ya cargadas por fetchData()).
             if (!zona) {
-                const allZones = await getZonas();
+                const allZones = isOnline ? await getZonas() : zones;
+
+                if (!isOnline && allZones.length === 0) {
+                    Swal.fire(
+                        'Sin conexión y sin zonas en memoria',
+                        'No hay datos de zonas guardados en este dispositivo todavía. Conéctese a internet al menos una vez antes de escanear sin conexión.',
+                        'error'
+                    );
+                    return;
+                }
 
                 // Exact alias match
                 const exactMatch = allZones.find(z => z.alias?.toUpperCase() === searchTerm);
@@ -444,7 +468,19 @@ const DashboardDocente = () => {
                 return;
             }
 
-            await createRegistro(registrationData);
+            try {
+                await createRegistro(registrationData);
+            } catch (submitError) {
+                // navigator.onLine puede reportar "conectado" sin haber internet real
+                // (ej. wifi sin salida). Si fue un fallo de red (sin respuesta del
+                // servidor), se guarda igual en la cola offline en vez de perder el registro.
+                if (submitError.status === undefined) {
+                    saveToQueue(registrationData);
+                    setManualDoc('');
+                    return;
+                }
+                throw submitError;
+            }
 
             try {
                 await createLog({
@@ -506,7 +542,7 @@ const DashboardDocente = () => {
             console.error("Error in registration:", error);
             Swal.fire('Error', 'Problema al procesar el registro: ' + error.message, 'error');
         }
-    }, [user, location, checkSchedule, saveToQueue]);
+    }, [user, location, checkSchedule, saveToQueue, zones]);
 
     const handleScanSuccess = React.useCallback(async (decodedText) => {
         await registerPresence(decodedText);
