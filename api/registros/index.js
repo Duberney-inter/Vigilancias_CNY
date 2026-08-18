@@ -5,6 +5,23 @@ import { insertLogFromToken } from '../_lib/audit.js';
 const PRIVILEGED_ROLES = [ADMIN_ROLE, DIRECTOR_ROLE, ASISTENTE_ROLE];
 const OPERATIVE_ROLES = ['DOCENTE', 'JEFE DE AREA'];
 
+// Un solo registro por persona/zona/día: cada zona tiene un único horario
+// diario, así que "una vez por día en esta zona" equivale a "una vez en el
+// horario asignado a esa zona".
+const dayPrefix = (isoTimestamp) => String(isoTimestamp || '').slice(0, 10);
+
+async function findExistingRegistro(usuarioId, zonaId, isoTimestamp) {
+    const prefix = dayPrefix(isoTimestamp);
+    if (!zonaId || !prefix) return null;
+    const { rows } = await query(
+        `SELECT id FROM registros
+         WHERE "usuarioId" = $1 AND "zonaId" = $2 AND timestamp LIKE $3
+         LIMIT 1`,
+        [usuarioId, zonaId, `${prefix}%`]
+    );
+    return rows[0] || null;
+}
+
 export default async function handler(req, res) {
     if (handleCors(req, res)) return;
 
@@ -43,31 +60,58 @@ export default async function handler(req, res) {
                 const values = [];
                 const placeholders = [];
                 let i = 1;
+                let skipped = 0;
+                // Evita duplicados dentro del mismo lote (ej. dos escaneos offline
+                // de la misma zona el mismo día antes de sincronizar).
+                const seenInBatch = new Set();
 
                 for (const item of body) {
+                    const isoTimestamp = item.timestamp || new Date().toISOString();
+                    const batchKey = `${item.zonaId}|${dayPrefix(isoTimestamp)}`;
+
+                    if (seenInBatch.has(batchKey) || await findExistingRegistro(ownDocumento, item.zonaId, isoTimestamp)) {
+                        skipped++;
+                        continue;
+                    }
+                    seenInBatch.add(batchKey);
+
                     placeholders.push(`($${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, $${i++}, NOW())`);
                     values.push(
                         item.zonaId,
                         item.zonaAlias,
                         ownDocumento,
                         decoded.nombre,
-                        item.timestamp || new Date().toISOString(),
+                        isoTimestamp,
                         item.coords?.lat || null,
                         item.coords?.lng || null,
                         item.distancia || 0
                     );
                 }
 
-                await query(
-                    `INSERT INTO registros ("zonaId", "zonaAlias", "usuarioId", "usuarioNombre", timestamp, latitud, longitud, distancia, "syncedAt")
-                     VALUES ${placeholders.join(', ')}`,
-                    values
-                );
-                await insertLogFromToken(decoded, `Sincronización offline de ${body.length} vigilancia(s)`);
+                if (placeholders.length > 0) {
+                    await query(
+                        `INSERT INTO registros ("zonaId", "zonaAlias", "usuarioId", "usuarioNombre", timestamp, latitud, longitud, distancia, "syncedAt")
+                         VALUES ${placeholders.join(', ')}`,
+                        values
+                    );
+                    await insertLogFromToken(decoded, `Sincronización offline de ${placeholders.length} vigilancia(s)`);
+                }
 
                 return res.status(201).json({
-                    message: `${body.length} registros sincronizados`,
-                    count: body.length
+                    message: skipped > 0
+                        ? `${placeholders.length} registros sincronizados, ${skipped} omitido(s) por duplicado`
+                        : `${placeholders.length} registros sincronizados`,
+                    count: placeholders.length,
+                    skipped
+                });
+            }
+
+            const isoTimestamp = body.timestamp || new Date().toISOString();
+            const existing = await findExistingRegistro(ownDocumento, body.zonaId, isoTimestamp);
+            if (existing) {
+                return res.status(409).json({
+                    error: 'duplicate-registro',
+                    message: 'Ya registró su vigilancia en esta zona durante este horario. No puede volver a registrar hasta el siguiente turno.'
                 });
             }
 
@@ -80,7 +124,7 @@ export default async function handler(req, res) {
                 body.zonaAlias,
                 ownDocumento,
                 decoded.nombre,
-                body.timestamp || new Date().toISOString(),
+                isoTimestamp,
                 body.coords?.lat || null,
                 body.coords?.lng || null,
                 body.distancia || 0

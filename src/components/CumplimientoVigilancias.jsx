@@ -3,18 +3,9 @@ import { getHorarios, getRegistros, getUsuarios, getZonas } from '../lib/api';
 import { downloadExcelCsv, formatDateTimeForExcel } from '../utils/exportCsv';
 import { downloadPdfTable } from '../utils/exportPdf';
 import { PaginationBar, usePagination } from './PaginationBar';
+import { getDiaCiclo, listSchoolDays, toDateKeyLocal } from '../utils/cycleDay';
 
-const toDateKey = (value) => {
-    if (!value) return '';
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) {
-        return String(value).slice(0, 10);
-    }
-    const y = d.getFullYear();
-    const m = String(d.getMonth() + 1).padStart(2, '0');
-    const day = String(d.getDate()).padStart(2, '0');
-    return `${y}-${m}-${day}`;
-};
+const toDateKey = toDateKeyLocal;
 
 const startOfDay = (dateStr) => new Date(`${dateStr}T00:00:00`);
 const endOfDay = (dateStr) => new Date(`${dateStr}T23:59:59.999`);
@@ -103,6 +94,12 @@ const CumplimientoVigilancias = ({ onBack }) => {
 
     const pendingLabel = isOpenDay ? 'AÚN NO' : 'NO CUMPLIÓ';
     const pendingLabelShort = isOpenDay ? 'Aún no' : 'No cumplieron';
+    const diaCicloHoy = getDiaCiclo(new Date());
+
+    const schoolDays = useMemo(
+        () => listSchoolDays(range.from, range.to),
+        [range.from, range.to]
+    );
 
     const teachers = useMemo(() => {
         const assignedDocs = new Set(
@@ -132,6 +129,13 @@ const CumplimientoVigilancias = ({ onBack }) => {
             return !Number.isNaN(t) && t >= range.from.getTime() && t <= range.to.getTime();
         });
 
+        const registroMatchesZone = (registro, zone) => {
+            if (!zone) return false;
+            if (String(registro.zonaId) === String(zone.id)) return true;
+            const alias = String(registro.zonaAlias || '').trim().toUpperCase();
+            return alias && alias === String(zone.alias || '').trim().toUpperCase();
+        };
+
         return teachers.map((teacher) => {
             const doc = String(teacher.documento || teacher.uid || '');
             const name = teacher.nombre || '';
@@ -139,18 +143,46 @@ const CumplimientoVigilancias = ({ onBack }) => {
                 String(r.usuarioId || '') === doc ||
                 (r.usuarioNombre && name && r.usuarioNombre === name)
             );
-            const sorted = [...mine].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+
+            const dutyDays = schoolDays.map((day) => {
+                const assignment = (horarios || []).find((h) =>
+                    String(h.usuarioId) === doc &&
+                    Number(h.diaCiclo) === day.diaCiclo &&
+                    h.zonaId
+                );
+                if (!assignment) return null;
+                const zone = zoneById[String(assignment.zonaId)] || null;
+                const scans = mine.filter((r) =>
+                    toDateKey(r.timestamp) === day.key && registroMatchesZone(r, zone)
+                );
+                return {
+                    ...day,
+                    zone,
+                    scans,
+                    cumplio: scans.length > 0
+                };
+            }).filter(Boolean);
+
+            const matchingScans = dutyDays.flatMap((day) => day.scans);
+            const sorted = [...matchingScans].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
             const last = sorted[0];
             const lastZone = last
                 ? (zoneById[String(last.zonaId)] || zoneById[String(last.zonaAlias || '').toUpperCase()])
                 : null;
 
-            const assignedZones = (horarios || [])
-                .filter((h) => String(h.usuarioId) === doc && h.zonaId)
-                .map((h) => zoneById[String(h.zonaId)]?.alias || zoneById[String(h.zonaId)]?.nombre || h.zonaId);
+            const daysDone = dutyDays.filter((day) => day.cumplio).length;
+            const daysDuty = dutyDays.length;
+            const cumplio = daysDuty > 0 && daysDone === daysDuty;
+            const todayDuty = dutyDays.find((day) => day.key === today);
+            const assignedLabel = todayDuty?.zone
+                ? `${todayDuty.zone.alias || todayDuty.zone.nombre} (Día ${todayDuty.diaCiclo})`
+                : (daysDuty
+                    ? `${daysDone}/${daysDuty} día(s) del ciclo`
+                    : 'Sin turno en el periodo');
 
-            const uniqueAssigned = [...new Set(assignedZones)];
-            const cumplio = mine.length > 0;
+            const uniqueAssigned = [...new Set(
+                dutyDays.map((day) => day.zone?.alias || day.zone?.nombre).filter(Boolean)
+            )];
 
             return {
                 documento: doc,
@@ -158,17 +190,20 @@ const CumplimientoVigilancias = ({ onBack }) => {
                 rol: teacher.rol,
                 area: teacher.grupoArea || teacher.area || '',
                 cumplio,
-                estado: cumplio ? 'SÍ CUMPLIÓ' : pendingLabel,
-                cantidad: mine.length,
+                sinTurno: daysDuty === 0,
+                estado: daysDuty === 0 ? 'SIN TURNO' : (cumplio ? 'SÍ CUMPLIÓ' : pendingLabel),
+                cantidad: matchingScans.length,
+                diasCumplidos: `${daysDone}/${daysDuty}`,
                 ultimaHora: last ? formatDateTimeForExcel(last.timestamp) : '—',
                 ultimaZona: lastZone?.nombre || last?.zonaAlias || '—',
-                zonasAsignadasCiclo: uniqueAssigned.length ? uniqueAssigned.join(', ') : 'Sin asignación en ciclo'
+                zonaAsignada: assignedLabel,
+                zonasAsignadasCiclo: uniqueAssigned.length ? uniqueAssigned.join(', ') : 'Sin asignación en el periodo'
             };
-        }).sort((a, b) => {
+        }).filter((row) => !row.sinTurno).sort((a, b) => {
             if (a.cumplio !== b.cumplio) return a.cumplio ? -1 : 1;
             return a.nombre.localeCompare(b.nombre);
         });
-    }, [teachers, registros, range, zoneById, horarios, pendingLabel]);
+    }, [teachers, registros, range, zoneById, horarios, pendingLabel, schoolDays, today]);
 
     const filtered = useMemo(() => {
         const term = search.trim().toLowerCase();
@@ -206,7 +241,9 @@ const CumplimientoVigilancias = ({ onBack }) => {
         Rol: r.rol,
         Area: r.area,
         Estado: r.estado,
-        Cantidad_Vigilancias: r.cantidad,
+        Zona_asignada: r.zonaAsignada,
+        Dias_cumplidos: r.diasCumplidos,
+        Escaneos_en_zona: r.cantidad,
         Ultima_Vigilancia: r.ultimaHora,
         Ultima_Zona: r.ultimaZona,
         Periodo: range.label
@@ -237,35 +274,33 @@ const CumplimientoVigilancias = ({ onBack }) => {
     }
 
     return (
-        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '20px', padding: '0 20px' }}>
-            <div style={{
-                display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px',
-                background: 'white', padding: '15px 25px', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.05)'
-            }}>
-                <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+        <div className="page-content">
+            <div className="page-toolbar">
+                <div className="page-toolbar-start">
                     <button className="btn btn-back" onClick={onBack} style={{ margin: 0 }}>
                         <i className="fas fa-arrow-left"></i> Volver al Inicio
                     </button>
                     <div>
-                        <h2 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '20px', fontWeight: '800' }}>
+                        <h2>
                             Cumplimiento de Vigilancias
                         </h2>
                         <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '13px', fontWeight: '600' }}>
-                            Cumplimiento · {range.label}
+                            {range.label}
+                            {diaCicloHoy == null ? ' · Fin de semana (sin ciclo)' : ` · Hoy es Día ${diaCicloHoy} del ciclo`}
                         </p>
                     </div>
                 </div>
-                <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                <div className="page-toolbar-actions">
                     <button className="btn btn-green" onClick={exportCsv} style={{ margin: 0, width: 'auto' }}>
-                        <i className="fas fa-file-csv"></i> Cumplimiento CSV
+                        <i className="fas fa-file-csv"></i> CSV
                     </button>
                     <button className="btn btn-dark" onClick={exportPdf} style={{ margin: 0, width: 'auto' }}>
-                        <i className="fas fa-file-pdf"></i> Cumplimiento PDF
+                        <i className="fas fa-file-pdf"></i> PDF
                     </button>
                 </div>
             </div>
 
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '15px' }}>
+            <div className="admin-kpi-grid">
                 <div className="admin-kpi-card registros" style={{ margin: 0 }}>
                     <h2 className="admin-kpi-value">{stats.total}</h2>
                     <span className="admin-kpi-label">Con asignación</span>
@@ -290,9 +325,9 @@ const CumplimientoVigilancias = ({ onBack }) => {
                 </div>
             </div>
 
-            <div className="card" style={{ margin: 0, padding: '20px', textAlign: 'left' }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'end' }}>
-                    <div style={{ minWidth: '180px' }}>
+            <div className="card" style={{ margin: 0, padding: '16px', textAlign: 'left' }}>
+                <div className="filters-grid">
+                    <div>
                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Periodo</label>
                         <select
                             value={period}
@@ -329,7 +364,7 @@ const CumplimientoVigilancias = ({ onBack }) => {
                             </div>
                         </>
                     )}
-                    <div style={{ flex: 1, minWidth: '220px' }}>
+                    <div style={{ minWidth: 0 }}>
                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Buscar</label>
                         <input
                             type="text"
@@ -339,7 +374,7 @@ const CumplimientoVigilancias = ({ onBack }) => {
                             style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', margin: 0 }}
                         />
                     </div>
-                    <div style={{ minWidth: '160px' }}>
+                    <div style={{ minWidth: 0 }}>
                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Rol</label>
                         <select
                             value={rolFilter}
@@ -352,7 +387,7 @@ const CumplimientoVigilancias = ({ onBack }) => {
                             ))}
                         </select>
                     </div>
-                    <div style={{ minWidth: '160px' }}>
+                    <div style={{ minWidth: 0 }}>
                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Área</label>
                         <select
                             value={areaFilter}
@@ -418,7 +453,8 @@ const CumplimientoVigilancias = ({ onBack }) => {
                                 <th style={{ color: 'white', padding: '12px 15px' }}>Estado</th>
                                 <th style={{ color: 'white', padding: '12px 15px' }}>Docente</th>
                                 <th style={{ color: 'white', padding: '12px 15px' }}>Rol / Área</th>
-                                <th style={{ color: 'white', padding: '12px 15px' }}>Cantidad</th>
+                                <th style={{ color: 'white', padding: '12px 15px' }}>Zona asignada</th>
+                                <th style={{ color: 'white', padding: '12px 15px' }}>Escaneos</th>
                                 <th style={{ color: 'white', padding: '12px 15px' }}>Última vigilancia</th>
                                 <th style={{ color: 'white', padding: '12px 15px' }}>Última zona</th>
                             </tr>
@@ -426,7 +462,7 @@ const CumplimientoVigilancias = ({ onBack }) => {
                         <tbody>
                             {tablePager.total === 0 ? (
                                 <tr>
-                                    <td colSpan="6" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8', fontWeight: '600' }}>
+                                    <td colSpan="7" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8', fontWeight: '600' }}>
                                         No hay resultados para el filtro seleccionado.
                                     </td>
                                 </tr>
@@ -457,6 +493,9 @@ const CumplimientoVigilancias = ({ onBack }) => {
                                             <div style={{ fontWeight: '700' }}>{row.rol}</div>
                                             <div>{row.area || '—'}</div>
                                         </td>
+                                        <td style={{ padding: '12px 15px', fontSize: '13px', color: '#334155', fontWeight: '600' }}>
+                                            {row.zonaAsignada}
+                                        </td>
                                         <td style={{ padding: '12px 15px', fontWeight: '800', color: 'var(--color-blue-dark)' }}>
                                             {row.cantidad}
                                         </td>
@@ -483,9 +522,9 @@ const CumplimientoVigilancias = ({ onBack }) => {
                     onNext={tablePager.goNext}
                 />
                 <p style={{ margin: '12px 0 0 0', fontSize: '12px', color: '#94a3b8' }}>
-                    Solo se listan docentes/jefes con zona asignada en horarios.
+                    Solo se listan quienes tienen zona asignada en el periodo (día de ciclo). Cumple si escaneó esa zona ese día. La hora es la de la zona.
                     {isOpenDay
-                        ? ' En el día actual: “SÍ CUMPLIÓ” o “AÚN NO” (el día todavía no termina).'
+                        ? ' En el día actual: “SÍ CUMPLIÓ” o “AÚN NO”.'
                         : ' En historial: “SÍ CUMPLIÓ” o “NO CUMPLIÓ”.'}
                 </p>
             </div>

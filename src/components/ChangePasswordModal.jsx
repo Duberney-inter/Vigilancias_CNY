@@ -77,9 +77,10 @@ const ChangePasswordModal = ({ user, isOpen, onClose }) => {
     return (
         <div style={{
             position: 'fixed', top: 0, left: 0, width: '100%', height: '100%',
-            backgroundColor: 'rgba(0,0,0,0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 4000
+            backgroundColor: 'rgba(0,0,0,0.8)', display: 'flex', justifyContent: 'center', alignItems: 'center', zIndex: 4000,
+            padding: '16px', boxSizing: 'border-box'
         }}>
-            <div className="card" style={{ maxWidth: '400px', width: '90%', animation: 'fadeIn 0.3s ease' }}>
+            <div className="card" style={{ maxWidth: '400px', width: '100%', margin: 0, animation: 'fadeIn 0.3s ease' }}>
                 <h3 style={{ color: 'var(--color-blue-dark)' }}>Gestionar Contraseña</h3>
                 <p style={{ fontSize: '12px', color: 'var(--text-light)', marginBottom: '20px' }}>
                     Ingrese su contraseña actual y la nueva contraseña.
@@ -109,7 +110,7 @@ const ChangePasswordModal = ({ user, isOpen, onClose }) => {
                         required
                         autoComplete="new-password"
                     />
-                    <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '20px', flexWrap: 'wrap' }}>
                         <button type="submit" className="btn btn-green" disabled={loading} style={{ margin: 0 }}>
                             {loading ? 'Guardando...' : 'Actualizar'}
                         </button>

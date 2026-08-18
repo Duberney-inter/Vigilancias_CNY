@@ -6,6 +6,7 @@ import Swal from 'sweetalert2';
 import LiveSupervision from '../components/LiveSupervision';
 import CumplimientoVigilancias from '../components/CumplimientoVigilancias';
 import ComunicadosHistorial from '../components/ComunicadosHistorial';
+import ComunicadoDestinatarioSelect, { resolveComunicadoDestinatario } from '../components/ComunicadoDestinatarioSelect';
 import { downloadExcelCsv, formatDateTimeForExcel } from '../utils/exportCsv';
 import { downloadPdfTable } from '../utils/exportPdf';
 import { getDistance } from '../utils/geoUtils';
@@ -179,8 +180,8 @@ const DashboardDirector = ({ readOnly = false }) => {
             zonesToDraw.forEach(z => {
                 if (z.latitud && z.longitud && parseFloat(z.latitud) !== 0) {
                     const zoneCircle = L.circle([parseFloat(z.latitud), parseFloat(z.longitud)], {
-                        color: 'var(--color-blue-dark)',
-                        fillColor: 'var(--color-blue-light)',
+                        color: '#0D0D0D',
+                        fillColor: '#424242',
                         fillOpacity: selectedZone ? 0.25 : 0.15,
                         weight: selectedZone ? 3 : 2,
                         dashArray: '5, 5',
@@ -437,6 +438,10 @@ const DashboardDirector = ({ readOnly = false }) => {
     const sendNotif = async () => {
         if (!notifMsg) return Swal.fire('Error', 'Escribe un mensaje', 'warning');
         if (readOnly) return Swal.fire('Acceso restringido', 'El Asistente solo puede consultar información.', 'info');
+        const destinatario = resolveComunicadoDestinatario(notifTarget, selectedUser);
+        if (notifTarget === 'INDIVIDUAL' && !destinatario) {
+            return Swal.fire('Atención', 'Seleccione el usuario destinatario.', 'warning');
+        }
 
         Swal.fire({ title: 'Enviando...', didOpen: () => Swal.showLoading() });
         try {
@@ -446,10 +451,12 @@ const DashboardDirector = ({ readOnly = false }) => {
             await createComunicado({
                 mensaje: notifMsg,
                 emisor: adminUser?.nombre || 'Director',
-                destinatario: notifTarget === 'INDIVIDUAL' ? selectedUser : notifTarget
+                destinatario
             });
 
             setNotifMsg('');
+            setNotifTarget('ALL');
+            setSelectedUser('');
             setComunicadosPage(1);
             await fetchComunicadosEnviados();
             Swal.fire('Enviado', 'Notificación comunicada con éxito', 'success');
@@ -459,8 +466,8 @@ const DashboardDirector = ({ readOnly = false }) => {
     };
 
     const renderMain = () => (
-        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '25px' }}>
-            <div className="admin-kpi-grid" style={{ gridTemplateColumns: 'repeat(2, 1fr)' }}>
+        <div className="page-content">
+            <div className="admin-kpi-grid kpi-2">
                 <div className="admin-kpi-card registros">
                     <h2 className="admin-kpi-value">{kpis.totalRegistros}</h2>
                     <span className="admin-kpi-label">Vigilancias Totales</span>
@@ -471,28 +478,19 @@ const DashboardDirector = ({ readOnly = false }) => {
                 </div>
             </div>
 
-            <div className="card" style={{ 
-                padding: '30px 25px', 
-                textAlign: 'left', 
-                background: 'rgba(255, 255, 255, 0.92)', 
-                backdropFilter: 'blur(10px)', 
-                border: '1px solid rgba(255, 255, 255, 0.4)', 
-                borderRadius: '20px',
-                boxShadow: '0 15px 35px rgba(0, 0, 0, 0.15)',
-                margin: '0 auto',
-                width: '100%'
-            }}>
+            <div className="card page-panel">
                 <h3 style={{ 
                     color: 'var(--color-blue-dark)', 
-                    marginBottom: '30px', 
+                    marginBottom: '20px', 
                     textAlign: 'center', 
                     fontWeight: '800', 
-                    fontSize: '22px',
+                    fontSize: 'clamp(16px, 2.4vw, 22px)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: '12px',
-                    letterSpacing: '0.5px'
+                    gap: '10px',
+                    letterSpacing: '0.5px',
+                    flexWrap: 'wrap'
                 }}>
                     <i className="fas fa-shield-alt" style={{ color: 'var(--color-green-primary)', fontSize: '24px' }}></i>
                     {readOnly ? 'Panel de Asistente — Supervisión' : 'Gestión Institucional CNY PREESCOLAR'}
@@ -748,40 +746,31 @@ const DashboardDirector = ({ readOnly = false }) => {
         };
 
         return (
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '20px', padding: '0 20px' }}>
-                <div style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
-                    alignItems: 'center', 
-                    background: 'white', 
-                    padding: '20px 30px', 
-                    borderRadius: '20px', 
-                    boxShadow: '0 10px 25px rgba(0,0,0,0.05)',
-                    borderLeft: '5px solid var(--color-green-primary)'
-                }}>
-                    <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+            <div className="page-content">
+                <div className="page-toolbar">
+                    <div className="page-toolbar-start">
                         <button className="btn btn-back" onClick={() => setView('main')} style={{ margin: 0 }}>
                             <i className="fas fa-arrow-left"></i> Volver al Inicio
                         </button>
                         <div>
-                            <h2 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '22px', fontWeight: '800' }}>Dashboard de Reportes Profesionales</h2>
+                            <h2>Dashboard de Reportes</h2>
                             <p style={{ margin: '3px 0 0 0', color: '#64748b', fontSize: '13px', fontWeight: '600' }}>
                                 {filteredRegs.length} vigilancia(s) · Análisis de cobertura e incidencias
                             </p>
                         </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
-                        <button className="btn btn-green" onClick={() => downloadCSV(filteredRegs, 'Reporte_Vigilancias')} style={{ margin: 0, width: 'auto', padding: '12px 25px', borderRadius: '12px' }}>
-                            <i className="fas fa-file-csv"></i> Descargar CSV
+                    <div className="page-toolbar-actions">
+                        <button className="btn btn-green" onClick={() => downloadCSV(filteredRegs, 'Reporte_Vigilancias')} style={{ margin: 0, width: 'auto', padding: '10px 16px', borderRadius: '12px' }}>
+                            <i className="fas fa-file-csv"></i> CSV
                         </button>
-                        <button className="btn btn-dark" onClick={() => downloadPDF(filteredRegs, 'Reporte_Vigilancias')} style={{ margin: 0, width: 'auto', padding: '12px 25px', borderRadius: '12px' }}>
-                            <i className="fas fa-file-pdf"></i> Descargar PDF
+                        <button className="btn btn-dark" onClick={() => downloadPDF(filteredRegs, 'Reporte_Vigilancias')} style={{ margin: 0, width: 'auto', padding: '10px 16px', borderRadius: '12px' }}>
+                            <i className="fas fa-file-pdf"></i> PDF
                         </button>
                     </div>
                 </div>
 
-                <div className="card" style={{ margin: 0, padding: '20px', textAlign: 'left', background: 'white', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.03)' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', alignItems: 'end' }}>
+                <div className="card" style={{ margin: 0, padding: '16px', textAlign: 'left' }}>
+                    <div className="filters-grid">
                         <div>
                             <label style={{ fontWeight: '700', fontSize: '12px', color: 'var(--color-blue-dark)', marginBottom: '6px', display: 'block' }}>
                                 <i className="fas fa-search"></i> Buscar
@@ -865,12 +854,12 @@ const DashboardDirector = ({ readOnly = false }) => {
                     </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '20px' }}>
-                    <div className="card" style={{ margin: 0, padding: '25px', height: '420px', display: 'flex', flexDirection: 'column', background: 'white', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.03)', textAlign: 'left' }}>
-                        <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '20px', fontSize: '16px', fontWeight: '800' }}>
+                <div className="charts-grid">
+                    <div className="card chart-card" style={{ margin: 0, padding: '16px' }}>
+                        <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '12px', fontSize: '15px', fontWeight: '800' }}>
                             <i className="fas fa-chart-pie"></i> {selectedTeacherId === 'ALL' ? 'Cumplimiento por Docente' : `Actividad de ${selectedTeacherId} por Zona`}
                         </h3>
-                        <div style={{ flex: 1, position: 'relative', height: '300px' }}>
+                        <div className="chart-canvas">
                             {selectedTeacherId === 'ALL' ? (
                                 <Bar data={teacherChartData} options={{ ...reportsChartOptions, indexAxis: 'y' }} />
                             ) : (
@@ -879,17 +868,17 @@ const DashboardDirector = ({ readOnly = false }) => {
                         </div>
                     </div>
 
-                    <div className="card" style={{ margin: 0, padding: '25px', height: '420px', display: 'flex', flexDirection: 'column', background: 'white', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.03)', textAlign: 'left' }}>
-                        <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '20px', fontSize: '16px', fontWeight: '800' }}>
+                    <div className="card chart-card" style={{ margin: 0, padding: '16px' }}>
+                        <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '12px', fontSize: '15px', fontWeight: '800' }}>
                             <i className="fas fa-chart-line"></i> Distribución de Horas Laborales
                         </h3>
-                        <div style={{ flex: 1, position: 'relative', height: '300px' }}>
+                        <div className="chart-canvas">
                             <Line data={timeData} options={reportsChartOptions} />
                         </div>
                     </div>
                 </div>
 
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '20px' }}>
+                <div className="charts-grid">
                     {selectedTeacherId !== 'ALL' && (
                         <div className="card" style={{ margin: 0, padding: '25px', background: 'white', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.03)', textAlign: 'left' }}>
                             <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '15px', fontSize: '16px', fontWeight: '800' }}>
@@ -919,7 +908,7 @@ const DashboardDirector = ({ readOnly = false }) => {
                         <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '15px', fontSize: '16px', fontWeight: '800' }}>
                             <i className="fas fa-calculator"></i> KPIs de Rendimiento {selectedTeacherId !== 'ALL' ? `(${selectedTeacherId})` : ''}
                         </h3>
-                        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '20px' }}>
+                        <div className="split-2">
                             <div style={{ 
                                 background: 'linear-gradient(135deg, #0077c2, #00a2ff)', 
                                 padding: '25px 20px', 
@@ -943,8 +932,8 @@ const DashboardDirector = ({ readOnly = false }) => {
                                 <div style={{ fontSize: '12px', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.5px', marginTop: '5px' }}>Incidencias</div>
                             </div>
                         </div>
-                        <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '20px', fontStyle: 'italic', textAlign: 'center', fontWeight: '600' }}>
-                            Sistema Optimizado para Vista HD Escritorio. Rev. 2026.
+                        <p style={{ fontSize: '11px', color: '#94a3b8', marginTop: '16px', textAlign: 'center', fontWeight: '600' }}>
+                            Sistema de vigilancias CNY · 2026
                         </p>
                     </div>
                 </div>
@@ -1096,22 +1085,24 @@ const DashboardDirector = ({ readOnly = false }) => {
         };
 
         return (
-        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '14px' }}>
-            <div style={{ width: '100%', maxWidth: '680px', display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div className="page-content">
+            <div className="page-toolbar">
+                <div className="page-toolbar-start">
                 <button className="btn btn-back" onClick={() => setView('main')} style={{ margin: 0 }}>
                     <i className="fas fa-arrow-left"></i> Volver
                 </button>
-                <div style={{ flex: 1 }}>
-                    <h3 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '18px', fontWeight: '800' }}>Novedades y Evidencias</h3>
+                <div>
+                    <h2>Novedades y Evidencias</h2>
                     <small style={{ color: '#64748b', fontWeight: '600' }}>
                         {filteredNovs.length} de {novedades.length}
                         {filteredNovs.length > 0 ? ` · Mostrando ${pageItems.length} (pág. ${safePage}/${totalPages})` : ''}
                     </small>
                 </div>
+                </div>
             </div>
 
-            <div className="card" style={{ width: '100%', maxWidth: '680px', textAlign: 'left', padding: '16px 18px', margin: 0 }}>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(120px, 1fr))', gap: '8px', alignItems: 'end' }}>
+            <div className="card" style={{ width: '100%', textAlign: 'left', padding: '16px', margin: 0 }}>
+                <div className="filters-grid">
                     <div style={{ gridColumn: '1 / -1' }}>
                         <input
                             type="text"
@@ -1160,7 +1151,7 @@ const DashboardDirector = ({ readOnly = false }) => {
                 </div>
             </div>
 
-            <div className="card" style={{ width: '100%', maxWidth: '680px', textAlign: 'left', padding: '14px 16px', margin: 0, minHeight: '160px' }}>
+            <div className="card" style={{ width: '100%', textAlign: 'left', padding: '14px 16px', margin: 0, minHeight: '160px' }}>
                 {filteredNovs.length === 0 ? (
                     <p style={{ margin: '24px 0', textAlign: 'center', color: '#94a3b8', fontWeight: '600' }}>
                         No hay novedades con los filtros actuales.
@@ -1266,7 +1257,7 @@ const DashboardDirector = ({ readOnly = false }) => {
     const renderNotifUI = () => {
         if (readOnly) {
             return (
-                <div style={{ width: '100%', maxWidth: '600px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+                <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '16px' }}>
                     <button className="btn btn-back" onClick={() => setView('main')}>
                         <i className="fas fa-arrow-left"></i> Volver al Inicio
                     </button>
@@ -1277,34 +1268,29 @@ const DashboardDirector = ({ readOnly = false }) => {
             );
         }
         return (
-        <div style={{ width: '100%', maxWidth: '720px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <button className="btn btn-back" onClick={() => setView('main')}>
-                <i className="fas fa-arrow-left"></i> Volver al Inicio
-            </button>
+        <div className="page-content">
+            <div className="page-toolbar">
+                <div className="page-toolbar-start">
+                    <button className="btn btn-back" onClick={() => setView('main')} style={{ margin: 0 }}>
+                        <i className="fas fa-arrow-left"></i> Volver al Inicio
+                    </button>
+                    <h2>Enviar notificación</h2>
+                </div>
+            </div>
 
             <div className="card">
                 <h3>Enviar Notificación</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '15px', marginTop: '10px' }}>
-
-                    <label>Enviar a:</label>
-                    <select value={notifTarget} onChange={(e) => setNotifTarget(e.target.value)}>
-                        <option value="ALL">Todo el Personal</option>
-                        <option value="DOCENTE">Todos los Docentes</option>
-                        <option value="JEFE DE AREA">Todos los Jefes de Área</option>
-                        <option value="INDIVIDUAL">Usuario Específico</option>
-                    </select>
-
-                    {notifTarget === 'INDIVIDUAL' && (
-                        <>
-                            <label>Seleccionar Usuario:</label>
-                            <select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)}>
-                                <option value="">Seleccione un usuario...</option>
-                                {users.sort((a, b) => a.nombre.localeCompare(b.nombre)).map(u => (
-                                    <option key={u.id || u.documento} value={u.nombre}>{u.nombre} ({u.rol})</option>
-                                ))}
-                            </select>
-                        </>
-                    )}
+                    <ComunicadoDestinatarioSelect
+                        target={notifTarget}
+                        onTargetChange={(value) => {
+                            setNotifTarget(value);
+                            if (value !== 'INDIVIDUAL') setSelectedUser('');
+                        }}
+                        selectedUser={selectedUser}
+                        onSelectedUserChange={setSelectedUser}
+                        users={users}
+                    />
 
                     <textarea
                         placeholder="Escriba el comunicado aquí..."
@@ -1432,21 +1418,21 @@ const DashboardDirector = ({ readOnly = false }) => {
         };
 
         return (
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '25px', padding: '0 20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white', padding: '15px 25px', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.05)' }}>
-                    <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+            <div className="page-content">
+                <div className="page-toolbar">
+                    <div className="page-toolbar-start">
                         <button className="btn btn-back" onClick={() => setView('main')} style={{ margin: 0 }}>
                             <i className="fas fa-arrow-left"></i> Volver
                         </button>
-                        <h2 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '20px', fontWeight: '800' }}>Panel Ejecutivo de Gestión</h2>
+                        <h2>Panel Ejecutivo de Gestión</h2>
                     </div>
-                    <div style={{ fontSize: '12px', color: '#64748b', background: '#f1f5f9', padding: '8px 15px', borderRadius: '20px', fontWeight: '600' }}>
+                    <div style={{ fontSize: '12px', color: '#64748b', background: '#f1f5f9', padding: '8px 15px', borderRadius: '20px', fontWeight: '600', maxWidth: '100%', overflowWrap: 'anywhere' }}>
                         <i className="far fa-clock"></i> Último corte: {new Date().toLocaleString()}
                     </div>
                 </div>
 
                 {/* KPI scorecards with premium cards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px' }}>
+                <div className="charts-grid">
                     
                     {/* Coverage Rate Card */}
                     <div className="card" style={{ 
@@ -1524,16 +1510,16 @@ const DashboardDirector = ({ readOnly = false }) => {
                 </div>
 
                 {/* Main Charts Grid */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(450px, 1fr))', gap: '20px' }}>
-                    <div className="card" style={{ margin: 0, padding: '20px', height: '400px', display: 'flex', flexDirection: 'column', textAlign: 'left' }}>
-                        <h3 style={{ fontSize: '15px', color: 'var(--color-blue-dark)', marginBottom: '15px', fontWeight: 'bold' }}>📉 Tendencia Histórica (Rondas por Día)</h3>
-                        <div style={{ flex: 1, position: 'relative', height: '280px' }}>
+                <div className="charts-grid">
+                    <div className="card chart-card" style={{ margin: 0, padding: '16px' }}>
+                        <h3 style={{ fontSize: '15px', color: 'var(--color-blue-dark)', marginBottom: '12px', fontWeight: 'bold' }}>Tendencia histórica (rondas por día)</h3>
+                        <div className="chart-canvas">
                             <Line data={trendData} options={chartOptions} />
                         </div>
                     </div>
-                    <div className="card" style={{ margin: 0, padding: '20px', height: '400px', display: 'flex', flexDirection: 'column', textAlign: 'left' }}>
-                        <h3 style={{ fontSize: '15px', color: 'var(--color-blue-dark)', marginBottom: '15px', fontWeight: 'bold' }}>🏆 Top 5 Zonas con Mayor Supervisión</h3>
-                        <div style={{ flex: 1, position: 'relative', height: '280px' }}>
+                    <div className="card chart-card" style={{ margin: 0, padding: '16px' }}>
+                        <h3 style={{ fontSize: '15px', color: 'var(--color-blue-dark)', marginBottom: '12px', fontWeight: 'bold' }}>Top 5 zonas con mayor supervisión</h3>
+                        <div className="chart-canvas">
                             <Bar data={rankingData} options={{ ...chartOptions, indexAxis: 'y' }} />
                         </div>
                     </div>
@@ -1717,16 +1703,16 @@ const DashboardDirector = ({ readOnly = false }) => {
         });
 
         return (
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '20px', padding: '0 20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white', padding: '15px 25px', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.05)' }}>
-                    <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+            <div className="page-content">
+                <div className="page-toolbar">
+                    <div className="page-toolbar-start">
                         <button className="btn btn-back" onClick={() => setView('main')} style={{ margin: 0 }}>
                             <i className="fas fa-arrow-left"></i> Volver al Inicio
                         </button>
-                        <h2 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '20px', fontWeight: '800' }}>Supervisión Satelital en Vivo</h2>
+                        <h2>Supervisión Satelital en Vivo</h2>
                     </div>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <span className="badge" style={{ background: '#2ecc71', fontWeight: 'bold' }}>🔴 Transmisión Activa</span>
+                        <span className="badge" style={{ background: '#2ecc71', fontWeight: 'bold' }}>Transmisión activa</span>
                     </div>
                 </div>
 
@@ -1855,7 +1841,7 @@ const DashboardDirector = ({ readOnly = false }) => {
                             placeholder="🔍 Buscar docente, zona, tipo o fecha..."
                             value={registrosSearch}
                             onChange={(e) => setRegistrosSearch(e.target.value)}
-                            style={{ padding: '10px 15px', border: '1px solid #e2e8f0', borderRadius: '8px', width: '320px', fontSize: '13px', margin: 0, background: '#f8fafc', textAlign: 'left' }}
+                            style={{ padding: '10px 15px', border: '1px solid #e2e8f0', borderRadius: '8px', width: '100%', maxWidth: '360px', fontSize: '13px', margin: 0, background: '#f8fafc', textAlign: 'left', minWidth: 0, boxSizing: 'border-box' }}
                         />
                     </div>
 
@@ -1929,7 +1915,7 @@ const DashboardDirector = ({ readOnly = false }) => {
     };
 
     return (
-        <div style={{ width: '100%', display: 'flex', justifyContent: 'center' }}>
+        <div className="page-content">
             {view === 'main' ? renderMain() :
                 view === 'kpis' ? renderKPIs() :
                     view === 'notif' ? (readOnly ? renderMain() : renderNotifUI()) :

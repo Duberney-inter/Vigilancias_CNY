@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { getZonas, getUsuarios, getRegistros, getLogs, createZona, createUsuario, deleteUsuario, setUsuarioActivo, setZonaActiva, updateZona, createLog, createComunicado, importUsuariosBulk, getHorarios, saveHorarios, updateUsuario, getComunicadosEnviados, downloadBackup, restoreBackup, purgeOldData, getConfig, updateConfig } from '../lib/api';
+import React, { useState, useEffect, useRef } from 'react';
+import { getZonas, getUsuarios, getRegistros, getLogs, createZona, createUsuario, deleteUsuario, setUsuarioActivo, setZonaActiva, updateZona, createLog, createComunicado, importUsuariosBulk, getHorarios, saveHorarios, updateUsuario, getComunicadosEnviados, downloadBackup, restoreBackup, purgeOldData } from '../lib/api';
 import { QRCodeSVG } from 'qrcode.react';
 import { toPng } from 'html-to-image';
 import Swal from 'sweetalert2';
@@ -11,6 +11,7 @@ import { downloadExcelCsv, downloadExcelCsvTemplate, formatDateTimeForExcel } fr
 import { downloadPdfTable } from '../utils/exportPdf';
 import { PaginationBar, slicePage } from '../components/PaginationBar';
 import ComunicadosHistorial from '../components/ComunicadosHistorial';
+import ComunicadoDestinatarioSelect, { resolveComunicadoDestinatario } from '../components/ComunicadoDestinatarioSelect';
 import {
     getUsuarioFieldError,
     isValidGrupo,
@@ -20,6 +21,25 @@ import {
 import { showSecurityPolicies } from '../utils/securityPolicies';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement, DoughnutController);
+
+const DEFAULT_AREAS = ['Preescolar', 'Primaria', 'General'];
+const CREATE_AREA_VALUE = '__crear__';
+
+const getUserArea = (user) => String(user?.grupo || user?.grupoArea || user?.area || '').trim();
+
+const uniqueAreas = (...lists) => {
+    const seen = new Set();
+    const result = [];
+    lists.flat().forEach((name) => {
+        const clean = String(name || '').trim();
+        if (!clean) return;
+        const key = clean.toLowerCase();
+        if (seen.has(key)) return;
+        seen.add(key);
+        result.push(clean);
+    });
+    return result.sort((a, b) => a.localeCompare(b, 'es'));
+};
 
 const DashboardAdmin = () => {
     const [view, setView] = useState('main'); // 'main', 'zones', 'users', 'logs', 'kpis', 'schedules', 'live', 'cumplimiento'
@@ -40,6 +60,7 @@ const DashboardAdmin = () => {
     const [logsTipo, setLogsTipo] = useState('ALL');
     const [logsFechaDesde, setLogsFechaDesde] = useState('');
     const [logsFechaHasta, setLogsFechaHasta] = useState('');
+    const [logsRol, setLogsRol] = useState('ALL');
 
     // Schedules State
     const [schedules, setSchedules] = useState([]);
@@ -54,6 +75,11 @@ const DashboardAdmin = () => {
     const [uEmail, setUEmail] = useState('');
     const [uRol, setURol] = useState('DOCENTE');
     const [uGrupo, setUGrupo] = useState('');
+    const [extraAreas, setExtraAreas] = useState([]);
+    const [areaModalOpen, setAreaModalOpen] = useState(false);
+    const [areaModalName, setAreaModalName] = useState('');
+    const [areaModalError, setAreaModalError] = useState('');
+    const areaModalResolver = useRef(null);
     const [userSearch, setUserSearch] = useState('');
     const [userRoleFilter, setUserRoleFilter] = useState('ALL');
     const [userGroupFilter, setUserGroupFilter] = useState('ALL');
@@ -81,6 +107,7 @@ const DashboardAdmin = () => {
     const [comunicadosPage, setComunicadosPage] = useState(1);
     const [comunicadoMsg, setComunicadoMsg] = useState('');
     const [comunicadoDest, setComunicadoDest] = useState('ALL');
+    const [comunicadoPersona, setComunicadoPersona] = useState('');
 
     const session = JSON.parse(localStorage.getItem('usuario_cny_2026'));
     const adminUser = session?.datos;
@@ -95,6 +122,49 @@ const DashboardAdmin = () => {
                 accion
             });
         } catch (e) { console.error("Error logging action:", e); }
+    };
+
+    const areaOptions = uniqueAreas(
+        DEFAULT_AREAS,
+        extraAreas,
+        users.map(getUserArea)
+    );
+
+    const rememberArea = (name) => {
+        const clean = String(name || '').trim();
+        if (!clean) return '';
+        setExtraAreas((prev) => uniqueAreas(prev, [clean]));
+        return clean;
+    };
+
+    const openCrearAreaModal = () => new Promise((resolve) => {
+        areaModalResolver.current = resolve;
+        setAreaModalName('');
+        setAreaModalError('');
+        setAreaModalOpen(true);
+    });
+
+    const finishCrearAreaModal = (value) => {
+        setAreaModalOpen(false);
+        setAreaModalName('');
+        setAreaModalError('');
+        const resolve = areaModalResolver.current;
+        areaModalResolver.current = null;
+        resolve?.(value || null);
+    };
+
+    const confirmCrearAreaModal = () => {
+        const clean = String(areaModalName || '').trim();
+        if (!clean) {
+            setAreaModalError('Escriba el nombre del área');
+            return;
+        }
+        if (!isValidGrupo(clean)) {
+            setAreaModalError('El área tiene caracteres no permitidos');
+            return;
+        }
+        const existing = areaOptions.find((area) => area.toLowerCase() === clean.toLowerCase());
+        finishCrearAreaModal(existing || rememberArea(clean));
     };
 
     const fetchData = async () => {
@@ -142,6 +212,9 @@ const DashboardAdmin = () => {
                     )).length,
                     usuariosRegistrados: usersList.length
                 });
+            } else if (view === 'comunicados' && users.length === 0) {
+                const usersList = await getUsuarios();
+                setUsers(Array.isArray(usersList) ? usersList : []);
             }
         } catch (error) {
             console.error('Error fetching data:', error);
@@ -285,6 +358,11 @@ const DashboardAdmin = () => {
         const email = String(uEmail || '').trim().toLowerCase();
         const grupo = String(uGrupo || '').trim();
 
+        if (!grupo) {
+            Swal.fire('Atención', 'Debe seleccionar un área o crear una nueva.', 'warning');
+            return;
+        }
+
         const fieldError = getUsuarioFieldError({ nombre, documento, email, grupo });
         if (fieldError) {
             Swal.fire('Atención', fieldError, 'warning');
@@ -322,6 +400,7 @@ const DashboardAdmin = () => {
             setUEmail('');
             setURol('DOCENTE');
             setUGrupo('');
+            rememberArea(grupo);
             fetchData();
         } catch (error) {
             Swal.fire('Error', error.message || 'No se pudo crear el usuario', 'error');
@@ -705,7 +784,7 @@ const DashboardAdmin = () => {
         .replace(/"/g, '&quot;');
 
     const viewUsuarioDetalles = (user) => {
-        const area = user.grupo || user.grupoArea || user.area || '—';
+        const area = getUserArea(user) || '—';
         const activo = isUsuarioActivo(user);
         Swal.fire({
             title: 'Detalles del usuario',
@@ -739,7 +818,7 @@ const DashboardAdmin = () => {
     };
 
     const editUsuario = async (user) => {
-        const currentArea = user.grupo || user.grupoArea || user.area || '';
+        const currentArea = getUserArea(user);
         const roles = [
             'DOCENTE',
             'JEFE DE AREA',
@@ -750,6 +829,16 @@ const DashboardAdmin = () => {
         const roleOptions = roles.map((rol) => (
             `<option value="${rol}" ${String(user.rol || '') === rol ? 'selected' : ''}>${rol}</option>`
         )).join('');
+        const areaSelectOptions = [
+            `<option value="">Seleccione un área</option>`,
+            ...areaOptions.map((area) => (
+                `<option value="${escapeHtmlUser(area)}" ${area === currentArea ? 'selected' : ''}>${escapeHtmlUser(area)}</option>`
+            )),
+            currentArea && !areaOptions.some((area) => area.toLowerCase() === currentArea.toLowerCase())
+                ? `<option value="${escapeHtmlUser(currentArea)}" selected>${escapeHtmlUser(currentArea)}</option>`
+                : '',
+            `<option value="${CREATE_AREA_VALUE}">+ Crear nueva área...</option>`
+        ].join('');
 
         const { value: formValues } = await Swal.fire({
             title: 'Editar usuario',
@@ -762,16 +851,39 @@ const DashboardAdmin = () => {
                 <div style="text-align:left;">
                     <p style="margin:0 0 12px; font-size:12px; color:#64748b;">
                         Editando a <strong>${escapeHtmlUser(user.nombre || '')}</strong>
-                        (Doc. ${escapeHtmlUser(user.documento || '')}). Solo se pueden cambiar área y rol.
+                        (Doc. ${escapeHtmlUser(user.documento || '')}). Puede cambiar el rol y el área.
                     </p>
                     <label style="font-weight:bold; font-size:13px; color:#555;">Rol</label>
                     <select id="swal-user-rol" class="swal2-input" style="width:100%;">
                         ${roleOptions}
                     </select>
-                    <label style="font-weight:bold; font-size:13px; color:#555;">Área / Grupo</label>
-                    <input id="swal-user-area" class="swal2-input" value="${escapeHtmlUser(currentArea)}" placeholder="Ej. Primaria, Bachillerato...">
+                    <label style="font-weight:bold; font-size:13px; color:#555;">Área</label>
+                    <select id="swal-user-area" class="swal2-input" style="width:100%;">
+                        ${areaSelectOptions}
+                    </select>
                 </div>
             `,
+            didOpen: () => {
+                const select = document.getElementById('swal-user-area');
+                if (!select) return;
+                let lastValue = select.value === CREATE_AREA_VALUE ? '' : select.value;
+                select.addEventListener('change', async () => {
+                    if (select.value !== CREATE_AREA_VALUE) {
+                        lastValue = select.value;
+                        return;
+                    }
+                    select.value = lastValue;
+                    const created = await openCrearAreaModal();
+                    if (!created) return;
+                    if (![...select.options].some((option) => option.value === created)) {
+                        const option = new Option(created, created, true, true);
+                        const createOption = [...select.options].find((item) => item.value === CREATE_AREA_VALUE);
+                        select.add(option, createOption || null);
+                    }
+                    select.value = created;
+                    lastValue = created;
+                });
+            },
             preConfirm: () => {
                 const rol = document.getElementById('swal-user-rol')?.value || '';
                 const grupo = String(document.getElementById('swal-user-area')?.value || '').trim();
@@ -779,8 +891,12 @@ const DashboardAdmin = () => {
                     Swal.showValidationMessage('Seleccione un rol válido');
                     return false;
                 }
+                if (!grupo || grupo === CREATE_AREA_VALUE) {
+                    Swal.showValidationMessage('Debe seleccionar un área o crear una nueva');
+                    return false;
+                }
                 if (!isValidGrupo(grupo)) {
-                    Swal.showValidationMessage('El grupo/área tiene caracteres no permitidos');
+                    Swal.showValidationMessage('El área tiene caracteres no permitidos');
                     return false;
                 }
                 return { rol, grupo };
@@ -801,6 +917,7 @@ const DashboardAdmin = () => {
                 rol: formValues.rol,
                 grupo: formValues.grupo
             });
+            rememberArea(formValues.grupo);
             await fetchData();
             Swal.fire('Guardado', 'Área y rol actualizados correctamente.', 'success');
         } catch (error) {
@@ -1065,59 +1182,6 @@ const DashboardAdmin = () => {
         });
     };
 
-    const configureGpsSchedule = async () => {
-        let current = { gpsDesde: '06:00', gpsHasta: '18:00' };
-        try {
-            current = await getConfig();
-        } catch (e) {
-            console.error('Error cargando configuración de GPS:', e);
-        }
-
-        const { value: formValues } = await Swal.fire({
-            title: 'Horario de Rastreo GPS',
-            html: `
-                <div style="text-align: left;">
-                    <p style="font-size:13px; color:#555;">
-                        Fuera de este horario, los dispositivos de los docentes no envían su ubicación
-                        en vivo (ahorra batería) y no aparecerán en el mapa de supervisión.
-                    </p>
-                    <label style="font-weight:bold; font-size:13px; color:#555;">Desde:</label>
-                    <input id="swal-gps-desde" type="time" class="swal2-input" value="${current.gpsDesde}">
-
-                    <label style="font-weight:bold; font-size:13px; color:#555;">Hasta:</label>
-                    <input id="swal-gps-hasta" type="time" class="swal2-input" value="${current.gpsHasta}">
-                </div>
-            `,
-            focusConfirm: false,
-            showCancelButton: true,
-            confirmButtonText: 'Guardar',
-            cancelButtonText: 'Cancelar',
-            preConfirm: () => {
-                const gpsDesde = document.getElementById('swal-gps-desde').value;
-                const gpsHasta = document.getElementById('swal-gps-hasta').value;
-                if (!gpsDesde || !gpsHasta) {
-                    Swal.showValidationMessage('Por favor complete ambos horarios');
-                    return false;
-                }
-                if (gpsDesde >= gpsHasta) {
-                    Swal.showValidationMessage('La hora "Desde" debe ser anterior a la hora "Hasta"');
-                    return false;
-                }
-                return { gpsDesde, gpsHasta };
-            }
-        });
-
-        if (!formValues) return;
-
-        try {
-            await updateConfig(formValues.gpsDesde, formValues.gpsHasta);
-            await logAction(`Horario de rastreo GPS actualizado: ${formValues.gpsDesde}-${formValues.gpsHasta}`);
-            Swal.fire('Guardado', 'El horario de rastreo GPS fue actualizado.', 'success');
-        } catch (e) {
-            Swal.fire('Error', e.message || 'No se pudo actualizar el horario de rastreo GPS', 'error');
-        }
-    };
-
     const fetchComunicadosEnviados = async () => {
         setLoadingComunicadosEnviados(true);
         try {
@@ -1137,15 +1201,21 @@ const DashboardAdmin = () => {
             Swal.fire('Atención', 'Escriba el mensaje del comunicado.', 'warning');
             return;
         }
+        const destinatario = resolveComunicadoDestinatario(comunicadoDest, comunicadoPersona);
+        if (comunicadoDest === 'INDIVIDUAL' && !destinatario) {
+            Swal.fire('Atención', 'Seleccione el usuario destinatario.', 'warning');
+            return;
+        }
         try {
             Swal.fire({ title: 'Enviando...', allowOutsideClick: false, didOpen: () => Swal.showLoading() });
             await createComunicado({
                 mensaje: text,
                 emisor: adminUser?.nombre,
-                destinatario: comunicadoDest || 'ALL'
+                destinatario
             });
-            await logAction(`Comunicado enviado (destinatario: ${comunicadoDest || 'ALL'})`);
             setComunicadoMsg('');
+            setComunicadoDest('ALL');
+            setComunicadoPersona('');
             setComunicadosPage(1);
             await fetchComunicadosEnviados();
             Swal.fire('Enviado', 'El comunicado se ha registrado correctamente', 'success');
@@ -1155,26 +1225,28 @@ const DashboardAdmin = () => {
     };
 
     const renderComunicadosUI = () => (
-        <div style={{ width: '100%', maxWidth: '900px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
-                <button className="btn btn-back" onClick={() => setView('main')}>
+        <div className="page-content">
+            <div className="page-toolbar">
+                <div className="page-toolbar-start">
+                <button className="btn btn-back" onClick={() => setView('main')} style={{ margin: 0 }}>
                     <i className="fas fa-arrow-left"></i> Volver al Inicio
                 </button>
+                </div>
             </div>
 
             <div className="card">
                 <h3 style={{ color: 'var(--color-blue-dark)', marginTop: 0 }}>Enviar Comunicado</h3>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '12px' }}>
-                    <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b' }}>Destinatario</label>
-                    <select
-                        value={comunicadoDest}
-                        onChange={(e) => setComunicadoDest(e.target.value)}
-                        style={{ margin: 0 }}
-                    >
-                        <option value="ALL">Todo el personal</option>
-                        <option value="DOCENTE">Todos los docentes</option>
-                        <option value="JEFE DE AREA">Todos los jefes de área</option>
-                    </select>
+                    <ComunicadoDestinatarioSelect
+                        target={comunicadoDest}
+                        onTargetChange={(value) => {
+                            setComunicadoDest(value);
+                            if (value !== 'INDIVIDUAL') setComunicadoPersona('');
+                        }}
+                        selectedUser={comunicadoPersona}
+                        onSelectedUserChange={setComunicadoPersona}
+                        users={users}
+                    />
                     <label style={{ fontSize: '12px', fontWeight: 700, color: '#64748b' }}>Mensaje</label>
                     <textarea
                         placeholder="Escriba el comunicado aquí..."
@@ -1203,7 +1275,7 @@ const DashboardAdmin = () => {
     );
 
     const renderMainButtons = () => (
-        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '25px' }}>
+        <div className="page-content">
             <div className="admin-kpi-grid">
                 <div className="admin-kpi-card registros">
                     <h2 className="admin-kpi-value">{kpis.totalRegistros}</h2>
@@ -1219,28 +1291,19 @@ const DashboardAdmin = () => {
                 </div>
             </div>
 
-            <div className="card" style={{ 
-                padding: '30px 25px', 
-                textAlign: 'left', 
-                background: 'rgba(255, 255, 255, 0.92)', 
-                backdropFilter: 'blur(10px)', 
-                border: '1px solid rgba(255, 255, 255, 0.4)', 
-                borderRadius: '20px',
-                boxShadow: '0 15px 35px rgba(0, 0, 0, 0.15)',
-                margin: '0 auto',
-                width: '100%'
-            }}>
+            <div className="card page-panel">
                 <h3 style={{ 
                     color: 'var(--color-blue-dark)', 
-                    marginBottom: '30px', 
+                    marginBottom: '20px', 
                     textAlign: 'center', 
                     fontWeight: '800', 
-                    fontSize: '22px',
+                    fontSize: 'clamp(16px, 2.4vw, 22px)',
                     display: 'flex',
                     alignItems: 'center',
                     justifyContent: 'center',
-                    gap: '12px',
-                    letterSpacing: '0.5px'
+                    gap: '10px',
+                    letterSpacing: '0.5px',
+                    flexWrap: 'wrap'
                 }}>
                     <i className="fas fa-shield-alt" style={{ color: 'var(--color-green-primary)', fontSize: '24px' }}></i>
                     Panel Administrativo CNY
@@ -1362,25 +1425,42 @@ const DashboardAdmin = () => {
     );
 
     const renderLogsUI = () => {
+        const formatLogAccion = (accion) => {
+            let text = String(accion || '');
+            text = text.replace(/\s*;\s*id:\s*[0-9a-f-]{36}/ig, '');
+            text = text.replace(/\s*·\s*id:\s*[0-9a-f-]{36}/ig, '');
+            text = text.replace(/\s*\(id:\s*[0-9a-f-]{36}\)/ig, '');
+            text = text.replace(/\s+por\s+[^(·]+/i, '');
+            text = text.replace(/\s*\(destinatario:\s*ALL\)/ig, ' · Todo el personal');
+            text = text.replace(/\s*\(destinatario:\s*([^)]+)\)/i, ' · $1');
+            return text.replace(/\s+/g, ' ').trim();
+        };
+
         const getLogBadge = (action) => {
             const lower = (action || '').toLowerCase();
-            if (lower.includes('cre') || lower.includes('import') || lower.includes('guard')) {
-                return { bg: '#e2f8e9', color: '#2e7d32', label: action };
+            const label = formatLogAccion(action);
+            if (lower.includes('comunicado leído') || lower.includes('comunicado leido')) {
+                return { bg: '#f3e8ff', color: '#7e22ce', label };
+            } else if (lower.includes('comunicado enviado')) {
+                return { bg: '#e0e7ff', color: '#3730a3', label };
+            } else if (lower.includes('cre') || lower.includes('import') || lower.includes('guard')) {
+                return { bg: '#e2f8e9', color: '#2e7d32', label };
             } else if (lower.includes('elimin') || lower.includes('borr') || lower.includes('remov') || lower.includes('fallid')) {
-                return { bg: '#fde8e8', color: '#c81e1e', label: action };
+                return { bg: '#fde8e8', color: '#c81e1e', label };
             } else if (lower.includes('modific') || lower.includes('actualiz') || lower.includes('edit') || lower.includes('cambi')) {
-                return { bg: '#fff3cd', color: '#856404', label: action };
+                return { bg: '#fff3cd', color: '#856404', label };
             } else if (lower.includes('login') || lower.includes('sesi') || lower.includes('autentic') || lower.includes('inicio')) {
-                return { bg: '#e1f5fe', color: '#0288d1', label: action };
+                return { bg: '#e1f5fe', color: '#0288d1', label };
             }
-            return { bg: '#f1f5f9', color: '#64748b', label: action };
+            return { bg: '#f1f5f9', color: '#64748b', label };
         };
 
         const matchesTipo = (accion, tipo) => {
             const lower = (accion || '').toLowerCase();
             if (tipo === 'ALL') return true;
             if (tipo === 'sesion') return lower.includes('sesi') || lower.includes('inicio') || lower.includes('login') || lower.includes('autentic');
-            if (tipo === 'crear') return lower.includes('cre') || lower.includes('import') || lower.includes('registro de vigilancia') || lower.includes('novedad') || lower.includes('comunicado') || lower.includes('sincronizaci');
+            if (tipo === 'crear') return lower.includes('cre') || lower.includes('import') || lower.includes('registro de vigilancia') || lower.includes('novedad') || (lower.includes('comunicado enviado')) || lower.includes('sincronizaci');
+            if (tipo === 'comunicado') return lower.includes('comunicado');
             if (tipo === 'eliminar') return lower.includes('elimin') || lower.includes('borr') || lower.includes('remov') || lower.includes('desactiv');
             if (tipo === 'editar') return lower.includes('edit') || lower.includes('actualiz') || lower.includes('cambi') || lower.includes('modific') || lower.includes('reactiv');
             if (tipo === 'fallo') return lower.includes('fallid') || lower.includes('incorrect');
@@ -1388,14 +1468,29 @@ const DashboardAdmin = () => {
         };
 
         const usuariosEnLogs = [...new Set(logs.map((l) => l.usuario).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+        const knownLogRoles = [
+            'DOCENTE',
+            'JEFE DE AREA',
+            'DIRECTOR',
+            'ASISTENTE',
+            'ADMINISTRADOR GENERAL'
+        ];
+        const extraLogRoles = [...new Set(logs.map((l) => String(l.rol || '').trim()).filter(Boolean))]
+            .filter((rol) => !knownLogRoles.includes(rol))
+            .sort((a, b) => a.localeCompare(b));
+        const rolesEnLogs = [...knownLogRoles, ...extraLogRoles];
+        const hasLogsSinRol = logs.some((l) => !String(l.rol || '').trim());
 
         const filteredLogs = logs.filter((log) => {
             const term = logsSearch.toLowerCase().trim();
             const dateObj = new Date(log.timestamp);
             const dateStr = dateObj.toLocaleString().toLowerCase();
             const dayKey = !Number.isNaN(dateObj.getTime()) ? dateObj.toISOString().slice(0, 10) : '';
+            const rol = String(log.rol || '').trim();
 
             if (logsUsuario !== 'ALL' && log.usuario !== logsUsuario) return false;
+            if (logsRol === 'NONE' && rol) return false;
+            if (logsRol !== 'ALL' && logsRol !== 'NONE' && rol !== logsRol) return false;
             if (!matchesTipo(log.accion, logsTipo)) return false;
             if (logsFechaDesde && dayKey && dayKey < logsFechaDesde) return false;
             if (logsFechaHasta && dayKey && dayKey > logsFechaHasta) return false;
@@ -1404,6 +1499,7 @@ const DashboardAdmin = () => {
             return (log.usuario || '').toLowerCase().includes(term) ||
                 (log.documento || '').toLowerCase().includes(term) ||
                 (log.accion || '').toLowerCase().includes(term) ||
+                rol.toLowerCase().includes(term) ||
                 dateStr.includes(term);
         });
 
@@ -1411,20 +1507,20 @@ const DashboardAdmin = () => {
         const pageLogs = logsPager.pageItems;
 
         return (
-            <div style={{ width: '100%', maxWidth: '1400px', display: 'flex', flexDirection: 'column', gap: '20px', padding: '0 20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white', padding: '20px 30px', borderRadius: '20px', boxShadow: '0 10px 25px rgba(0,0,0,0.05)', borderLeft: '5px solid var(--color-blue-dark)', width: '100%', flexWrap: 'wrap', gap: '15px' }}>
-                    <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+            <div className="page-content">
+                <div className="page-toolbar">
+                    <div className="page-toolbar-start">
                         <button className="btn btn-back" onClick={() => setView('main')} style={{ margin: 0 }}>
                             <i className="fas fa-arrow-left"></i> Volver al Inicio
                         </button>
                         <div>
-                            <h2 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '22px', fontWeight: '800' }}>Logs de Auditoría y Seguridad</h2>
+                            <h2>Logs de Auditoría y Seguridad</h2>
                             <p style={{ margin: '3px 0 0 0', color: '#64748b', fontSize: '13px', fontWeight: '600' }}>
                                 Mostrando {logsPager.total ? `${logsPager.from}–${logsPager.to} de ` : ''}{logsPager.total} de {logs.length} registros
                             </p>
                         </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <div className="page-toolbar-actions">
                         <button
                             className="btn btn-orange"
                             onClick={() => {
@@ -1436,7 +1532,8 @@ const DashboardAdmin = () => {
                                     Fecha_Hora: formatDateTimeForExcel(l.timestamp),
                                     Usuario: l.usuario || '',
                                     Documento: l.documento || '',
-                                    Accion: l.accion || ''
+                                    Rol: l.rol || '',
+                                    Accion: formatLogAccion(l.accion || '')
                                 }));
                                 downloadExcelCsv(rows, `admin_reporte_logs_${new Date().toISOString().slice(0, 10)}`);
                             }}
@@ -1455,7 +1552,8 @@ const DashboardAdmin = () => {
                                     Fecha_Hora: formatDateTimeForExcel(l.timestamp),
                                     Usuario: l.usuario || '',
                                     Documento: l.documento || '',
-                                    Accion: l.accion || ''
+                                    Rol: l.rol || '',
+                                    Accion: formatLogAccion(l.accion || '')
                                 }));
                                 downloadPdfTable(rows, `admin_reporte_logs_${new Date().toISOString().slice(0, 10)}`, {
                                     title: 'Logs de Auditoría',
@@ -1470,10 +1568,20 @@ const DashboardAdmin = () => {
                 </div>
 
                 <div className="card" style={{ margin: 0, padding: '20px', width: '100%', textAlign: 'left' }}>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '12px', alignItems: 'end' }}>
+                    <div className="filters-grid">
                         <div>
                             <label style={{ fontSize: '12px', fontWeight: '700', color: '#555', display: 'block', marginBottom: '5px' }}>Buscar</label>
-                            <input type="text" placeholder="Usuario, documento o acción..." value={logsSearch} onChange={(e) => { setLogsSearch(e.target.value); setLogsPage(1); }} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', width: '100%', background: '#f8fafc', fontSize: '13px', margin: 0 }} />
+                            <input type="text" placeholder="Usuario, documento, rol o acción..." value={logsSearch} onChange={(e) => { setLogsSearch(e.target.value); setLogsPage(1); }} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', width: '100%', background: '#f8fafc', fontSize: '13px', margin: 0 }} />
+                        </div>
+                        <div>
+                            <label style={{ fontSize: '12px', fontWeight: '700', color: '#555', display: 'block', marginBottom: '5px' }}>Rol</label>
+                            <select value={logsRol} onChange={(e) => { setLogsRol(e.target.value); setLogsPage(1); }} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', width: '100%', background: '#f8fafc', fontSize: '13px', margin: 0 }}>
+                                <option value="ALL">Todos los roles</option>
+                                {rolesEnLogs.map((rol) => (
+                                    <option key={rol} value={rol}>{rol}</option>
+                                ))}
+                                {hasLogsSinRol && <option value="NONE">Sin rol (usuario no encontrado)</option>}
+                            </select>
                         </div>
                         <div>
                             <label style={{ fontSize: '12px', fontWeight: '700', color: '#555', display: 'block', marginBottom: '5px' }}>Usuario</label>
@@ -1490,6 +1598,7 @@ const DashboardAdmin = () => {
                                 <option value="ALL">Todas</option>
                                 <option value="sesion">Sesión / acceso</option>
                                 <option value="crear">Crear / registrar</option>
+                                <option value="comunicado">Comunicados</option>
                                 <option value="editar">Editar / actualizar</option>
                                 <option value="eliminar">Eliminar</option>
                                 <option value="fallo">Fallos</option>
@@ -1504,7 +1613,7 @@ const DashboardAdmin = () => {
                             <input type="date" value={logsFechaHasta} onChange={(e) => { setLogsFechaHasta(e.target.value); setLogsPage(1); }} style={{ padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', width: '100%', background: '#f8fafc', fontSize: '13px', margin: 0 }} />
                         </div>
                         <div>
-                            <button className="btn btn-back" onClick={() => { setLogsSearch(''); setLogsUsuario('ALL'); setLogsTipo('ALL'); setLogsFechaDesde(''); setLogsFechaHasta(''); setLogsPage(1); }} style={{ margin: 0, width: '100%', padding: '10px 12px' }}>
+                            <button className="btn btn-back" onClick={() => { setLogsSearch(''); setLogsUsuario('ALL'); setLogsRol('ALL'); setLogsTipo('ALL'); setLogsFechaDesde(''); setLogsFechaHasta(''); setLogsPage(1); }} style={{ margin: 0, width: '100%', padding: '10px 12px' }}>
                                 Limpiar filtros
                             </button>
                         </div>
@@ -1516,16 +1625,17 @@ const DashboardAdmin = () => {
                         <table className="mini-table" style={{ margin: 0 }}>
                             <thead>
                                 <tr style={{ background: 'linear-gradient(135deg, var(--color-blue-dark), var(--color-blue-light))' }}>
-                                    <th style={{ color: 'white', padding: '12px 15px', width: '180px' }}>Fecha y Hora</th>
-                                    <th style={{ color: 'white', padding: '12px 15px', width: '200px' }}>Usuario</th>
-                                    <th style={{ color: 'white', padding: '12px 15px', width: '140px' }}>Documento</th>
+                                    <th style={{ color: 'white', padding: '12px 15px' }}>Fecha y Hora</th>
+                                    <th style={{ color: 'white', padding: '12px 15px' }}>Usuario</th>
+                                    <th style={{ color: 'white', padding: '12px 15px' }}>Documento</th>
+                                    <th style={{ color: 'white', padding: '12px 15px' }}>Rol</th>
                                     <th style={{ color: 'white', padding: '12px 15px' }}>Acción Ejecutada</th>
                                 </tr>
                             </thead>
                             <tbody>
                                 {filteredLogs.length === 0 ? (
                                     <tr>
-                                        <td colSpan="4" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8', fontSize: '14px', fontWeight: '600' }}>
+                                        <td colSpan="5" style={{ textAlign: 'center', padding: '30px', color: '#94a3b8', fontSize: '14px', fontWeight: '600' }}>
                                             No se encontraron logs que coincidan con los filtros.
                                         </td>
                                     </tr>
@@ -1537,8 +1647,21 @@ const DashboardAdmin = () => {
                                                 <td style={{ padding: '12px 15px', color: '#475569', fontWeight: '600' }}>{new Date(log.timestamp).toLocaleString()}</td>
                                                 <td style={{ padding: '12px 15px', color: '#1e293b', fontWeight: '700' }}>{log.usuario}</td>
                                                 <td style={{ padding: '12px 15px', color: '#64748b', fontWeight: '600' }}>{log.documento || '—'}</td>
+                                                <td style={{ padding: '12px 15px', color: '#334155', fontWeight: '700', fontSize: '12px' }}>{log.rol || '—'}</td>
                                                 <td style={{ padding: '12px 15px' }}>
-                                                    <span style={{ padding: '6px 12px', borderRadius: '8px', fontSize: '12px', fontWeight: '700', background: badge.bg, color: badge.color, display: 'inline-block' }}>{badge.label}</span>
+                                                    <span style={{
+                                                        padding: '6px 12px',
+                                                        borderRadius: '8px',
+                                                        fontSize: '12px',
+                                                        fontWeight: '700',
+                                                        background: badge.bg,
+                                                        color: badge.color,
+                                                        display: 'inline-block',
+                                                        maxWidth: '100%',
+                                                        whiteSpace: 'normal',
+                                                        lineHeight: 1.35,
+                                                        textAlign: 'left'
+                                                    }}>{badge.label}</span>
                                                 </td>
                                             </tr>
                                         );
@@ -1634,6 +1757,7 @@ const DashboardAdmin = () => {
                 Fecha_Hora: formatDateTimeForExcel(l.timestamp),
                 Usuario: l.usuario || '',
                 Documento: l.documento || '',
+                Rol: l.rol || '',
                 Accion: l.accion || ''
             }));
             save(rows, `admin_reporte_logs_${stamp}`, 'Logs de Auditoría');
@@ -1743,29 +1867,19 @@ const DashboardAdmin = () => {
         };
 
         return (
-            <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '25px', padding: '0 20px' }}>
+            <div className="page-content">
                 {/* Dashboard Banner Header */}
-                <div style={{ 
-                    display: 'flex', 
-                    justifyContent: 'space-between', 
-                    alignItems: 'center', 
-                    background: 'white', 
-                    padding: '20px 30px', 
-                    borderRadius: '20px', 
-                    boxShadow: '0 10px 25px rgba(0,0,0,0.05)',
-                    borderLeft: '5px solid var(--color-blue-dark)',
-                    width: '100%'
-                }}>
-                    <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+                <div className="page-toolbar">
+                    <div className="page-toolbar-start">
                         <button className="btn btn-back" onClick={() => setView('main')} style={{ margin: 0 }}>
                             <i className="fas fa-arrow-left"></i> Volver al Inicio
                         </button>
                         <div>
-                            <h2 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '22px', fontWeight: '800' }}>Panel de Control e Indicadores (KPIs)</h2>
+                            <h2>Panel de Control e Indicadores</h2>
                             <p style={{ margin: '3px 0 0 0', color: '#64748b', fontSize: '13px', fontWeight: '600' }}>Métricas y auditoría general del sistema</p>
                         </div>
                     </div>
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    <div className="page-toolbar-actions">
                         <button className="btn btn-green" onClick={() => downloadAdminReport('vigilancias', 'csv')} style={{ margin: 0, width: 'auto', padding: '10px 16px' }}>
                             <i className="fas fa-file-csv"></i> Vigilancias CSV
                         </button>
@@ -1776,7 +1890,7 @@ const DashboardAdmin = () => {
                 </div>
 
                 {/* KPI scorecards */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '20px', width: '100%' }}>
+                <div className="charts-grid">
                     
                     <div className="card" style={{ 
                         margin: 0, 
@@ -1846,30 +1960,30 @@ const DashboardAdmin = () => {
                 </div>
 
                 {/* Charts Grid */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(380px, 1fr))', gap: '20px', width: '100%' }}>
-                    <div className="card" style={{ margin: 0, padding: '25px', height: '400px', display: 'flex', flexDirection: 'column', background: 'white', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.03)', textAlign: 'left' }}>
-                        <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '15px', fontSize: '15px', fontWeight: '800' }}>
+                <div className="charts-grid">
+                    <div className="card chart-card" style={{ margin: 0, padding: '16px' }}>
+                        <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '12px', fontSize: '15px', fontWeight: '800' }}>
                             <i className="fas fa-chart-pie"></i> Distribución de Vigilancias por Zona
                         </h3>
-                        <div style={{ flex: 1, position: 'relative', height: '280px' }}>
+                        <div className="chart-canvas">
                             <Pie data={zoneChartData} options={kpiPieOptions} />
                         </div>
                     </div>
 
-                    <div className="card" style={{ margin: 0, padding: '25px', height: '400px', display: 'flex', flexDirection: 'column', background: 'white', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.03)', textAlign: 'left' }}>
-                        <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '15px', fontSize: '15px', fontWeight: '800' }}>
+                    <div className="card chart-card" style={{ margin: 0, padding: '16px' }}>
+                        <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '12px', fontSize: '15px', fontWeight: '800' }}>
                             <i className="fas fa-check-circle"></i> Nivel de Cumplimiento GPS
                         </h3>
-                        <div style={{ flex: 1, position: 'relative', height: '280px' }}>
+                        <div className="chart-canvas">
                             <Bar data={complianceData} options={kpiChartOptions} />
                         </div>
                     </div>
 
-                    <div className="card" style={{ margin: 0, padding: '25px', height: '400px', display: 'flex', flexDirection: 'column', background: 'white', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.03)', textAlign: 'left' }}>
-                        <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '15px', fontSize: '15px', fontWeight: '800' }}>
+                    <div className="card chart-card" style={{ margin: 0, padding: '16px' }}>
+                        <h3 style={{ color: 'var(--color-blue-dark)', marginBottom: '12px', fontSize: '15px', fontWeight: '800' }}>
                             <i className="fas fa-chart-bar"></i> Vigilancias por Área/Grupo
                         </h3>
-                        <div style={{ flex: 1, position: 'relative', height: '280px' }}>
+                        <div className="chart-canvas">
                             <Doughnut data={areaChartData} options={kpiPieOptions} />
                         </div>
                     </div>
@@ -1905,8 +2019,8 @@ const DashboardAdmin = () => {
                         const filterStyle = { padding: '10px 12px', border: '1px solid #e2e8f0', borderRadius: '8px', background: '#f8fafc', margin: 0, width: '100%' };
                         return (
                             <>
-                                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginBottom: '14px', alignItems: 'end' }}>
-                                    <div style={{ gridColumn: 'span 2' }}>
+                                <div className="filters-grid">
+                                    <div>
                                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#555', display: 'block', marginBottom: '5px' }}>Buscar</label>
                                         <input type="text" placeholder="Docente, documento o zona..." value={kpiSearch} onChange={(e) => { setKpiSearch(e.target.value); setKpiPage(1); }} style={filterStyle} />
                                     </div>
@@ -2009,12 +2123,12 @@ const DashboardAdmin = () => {
         });
 
         return (
-            <div style={{ width: '100%', maxWidth: '1400px', display: 'flex', flexDirection: 'column', gap: '20px', padding: '0 10px' }}>
+            <div className="page-content">
                 <div style={{ display: 'flex', gap: '15px', alignItems: 'center', flexWrap: 'wrap' }}>
                     <button className="btn btn-back" onClick={() => setView('main')} style={{ margin: 0 }}>
                         <i className="fas fa-arrow-left"></i> Volver al Inicio
                     </button>
-                    <h3 style={{ margin: 0, color: 'var(--color-blue-dark)', flex: 1, minWidth: '200px' }}>Gestión de Zonas</h3>
+                    <h3 style={{ margin: 0, color: 'var(--color-blue-dark)', flex: 1, minWidth: 0 }}>Gestión de Zonas</h3>
                 </div>
 
                 {/* Buscador de Zonas */}
@@ -2333,7 +2447,7 @@ const DashboardAdmin = () => {
             .sort((a, b) => (a.alias || '').localeCompare(b.alias || ''));
 
         return (
-            <div style={{ width: '100%', maxWidth: '1400px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+            <div className="page-content">
                 <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                     <button className="btn btn-back" onClick={() => setView('main')}>
                         <i className="fas fa-arrow-left"></i> Volver al Inicio
@@ -2346,8 +2460,8 @@ const DashboardAdmin = () => {
                         Configure el inicio del ciclo (Martes = Día 0). La rotación es de 6 días lectivos.
                     </p>
 
-                    <div style={{ display: 'flex', gap: '10px', marginTop: '20px', alignItems: 'flex-end' }}>
-                        <div style={{ flex: 1 }}>
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '20px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
+                        <div style={{ flex: '1 1 220px', minWidth: 0 }}>
                             <label style={{ fontSize: '12px', fontWeight: 'bold' }}>Fecha Referencia (Martes):</label>
                             <input type="date" value={refDate} onChange={(e) => setRefDate(e.target.value)} />
                         </div>
@@ -2427,12 +2541,7 @@ const DashboardAdmin = () => {
                         <div style={{ fontWeight: 800, color: 'var(--color-blue-dark)', fontSize: '14px', marginBottom: '10px' }}>
                             Asignación rápida (3 pasos)
                         </div>
-                        <div style={{
-                            display: 'grid',
-                            gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
-                            gap: '12px',
-                            marginBottom: '12px'
-                        }}>
+                        <div className="filters-grid" style={{ marginBottom: '12px' }}>
                             <div>
                                 <label style={{ fontSize: '11px', fontWeight: 700, color: '#64748b', display: 'block', marginBottom: '4px' }}>
                                     1. Docente
@@ -2609,7 +2718,8 @@ const DashboardAdmin = () => {
                                                         style={{
                                                             padding: '6px 10px',
                                                             fontSize: '12px',
-                                                            minWidth: '120px',
+                                                            minWidth: 0,
+                                                            width: '100%',
                                                             border: '1px solid #cbd5e1',
                                                             borderRadius: '8px',
                                                             background: schedulesEdit[`${u.documento}-${day}`] ? 'rgba(106, 180, 76, 0.08)' : '#fff',
@@ -2916,12 +3026,14 @@ const DashboardAdmin = () => {
         const usersPager = slicePage(filteredUsers, usersPage, 10);
         const pageUsers = usersPager.pageItems;
         return (
-            <div style={{ width: '100%', maxWidth: '1400px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '12px' }}>
+            <div className="page-content">
+                <div className="page-toolbar">
+                    <div className="page-toolbar-start">
                     <button className="btn btn-back" onClick={() => setView('main')} style={{ margin: 0 }}>
                         <i className="fas fa-arrow-left"></i> Volver al Inicio
                     </button>
-                    <div style={{ display: 'flex', gap: '8px', flexWrap: 'wrap' }}>
+                    </div>
+                    <div className="page-toolbar-actions">
                         <button
                             className="btn btn-green"
                             onClick={() => downloadAdminReport('usuarios', 'csv')}
@@ -2940,7 +3052,7 @@ const DashboardAdmin = () => {
                 </div>
                 <div className="card">
                     <h3 style={{ color: 'var(--color-blue-dark)' }}>Gestión de Usuarios</h3>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginBottom: '20px' }}>
+                    <div className="filters-grid" style={{ marginBottom: '20px' }}>
                         <input
                             type="text"
                             placeholder="Nombre completo *"
@@ -2971,13 +3083,32 @@ const DashboardAdmin = () => {
                             <option value="ASISTENTE">ASISTENTE</option>
                             <option value="ADMINISTRADOR GENERAL">ADMINISTRADOR GENERAL</option>
                         </select>
-                        <input type="text" placeholder="Grupo/Área" value={uGrupo} onChange={(e) => setUGrupo(e.target.value)} />
+                        <select
+                            value={uGrupo}
+                            onChange={async (e) => {
+                                const value = e.target.value;
+                                if (value === CREATE_AREA_VALUE) {
+                                    const created = await openCrearAreaModal();
+                                    if (created) setUGrupo(created);
+                                    return;
+                                }
+                                setUGrupo(value);
+                            }}
+                            aria-label="Área del usuario"
+                        >
+                            <option value="">Área *</option>
+                            {areaOptions.map((area) => (
+                                <option key={area} value={area}>{area}</option>
+                            ))}
+                            <option value={CREATE_AREA_VALUE}>+ Crear nueva área...</option>
+                        </select>
                         <button className="btn btn-green" onClick={addUsuario} style={{ margin: 0 }}>
                             <i className="fas fa-user-plus"></i> Crear Usuario
                         </button>
                     </div>
                     <p style={{ margin: '0 0 16px 0', fontSize: '12px', color: '#64748b', textAlign: 'left' }}>
-                        * Obligatorios: nombre (solo letras), documento (solo números, 5–15 dígitos) y correo válido.
+                        * Obligatorios: nombre (solo letras), documento (solo números, 5–15 dígitos), correo válido y área.
+                        El área se elige de la lista; si no existe, use “Crear nueva área” para abrir el modal.
                         No se permiten documento ni correo duplicados.
                     </p>
 
@@ -3150,7 +3281,7 @@ const DashboardAdmin = () => {
 
                     <div style={{ marginBottom: '15px', textAlign: 'left' }}>
                         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '10px', alignItems: 'center' }}>
-                        <div style={{ position: 'relative', flex: '2 1 320px' }}>
+                        <div style={{ position: 'relative', flex: '1 1 220px', minWidth: 0 }}>
                             <i
                                 className="fas fa-search"
                                 style={{ position: 'absolute', left: '15px', top: '50%', transform: 'translateY(-50%)', color: '#94a3b8' }}
@@ -3167,7 +3298,7 @@ const DashboardAdmin = () => {
                             value={userRoleFilter}
                             onChange={(event) => { setUserRoleFilter(event.target.value); setUsersPage(1); }}
                             aria-label="Filtrar usuarios por rol"
-                            style={{ margin: 0, flex: '1 1 190px' }}
+                            style={{ margin: 0, flex: '1 1 160px', minWidth: 0 }}
                         >
                             <option value="ALL">Todos los roles</option>
                             {userRoles.map((role) => (
@@ -3178,7 +3309,7 @@ const DashboardAdmin = () => {
                             value={userGroupFilter}
                             onChange={(event) => { setUserGroupFilter(event.target.value); setUsersPage(1); }}
                             aria-label="Filtrar usuarios por grupo o área"
-                            style={{ margin: 0, flex: '1 1 200px' }}
+                            style={{ margin: 0, flex: '1 1 160px', minWidth: 0 }}
                         >
                             <option value="ALL">Todos los grupos/áreas</option>
                             {userGroups.map((group) => (
@@ -3189,7 +3320,7 @@ const DashboardAdmin = () => {
                             value={userEstadoFilter}
                             onChange={(event) => { setUserEstadoFilter(event.target.value); setUsersPage(1); }}
                             aria-label="Filtrar usuarios por estado"
-                            style={{ margin: 0, flex: '1 1 160px' }}
+                            style={{ margin: 0, flex: '1 1 140px', minWidth: 0 }}
                         >
                             <option value="ALL">Todos los estados</option>
                             <option value="activo">Activos</option>
@@ -3224,6 +3355,7 @@ const DashboardAdmin = () => {
                                     <th>Documento</th>
                                     <th>Correo</th>
                                     <th>Rol</th>
+                                    <th>Área</th>
                                     <th>Estado</th>
                                     <th>Acciones</th>
                                 </tr>
@@ -3231,7 +3363,7 @@ const DashboardAdmin = () => {
                             <tbody>
                                 {filteredUsers.length === 0 ? (
                                     <tr>
-                                        <td colSpan="6" style={{ padding: '24px', color: '#64748b' }}>
+                                        <td colSpan="7" style={{ padding: '24px', color: '#64748b' }}>
                                             No se encontraron usuarios que coincidan con la búsqueda.
                                         </td>
                                     </tr>
@@ -3243,6 +3375,7 @@ const DashboardAdmin = () => {
                                         <td>{u.documento}</td>
                                         <td>{u.email || <span style={{ color: '#94a3b8' }}>Sin correo</span>}</td>
                                         <td>{u.rol}</td>
+                                        <td>{getUserArea(u) || <span style={{ color: '#94a3b8' }}>Sin área</span>}</td>
                                         <td>
                                             <span style={{
                                                 display: 'inline-block',
@@ -3307,7 +3440,7 @@ const DashboardAdmin = () => {
     };
 
     const renderConfigUI = () => (
-        <div style={{ width: '100%', maxWidth: '1400px', display: 'flex', flexDirection: 'column', gap: '20px' }}>
+        <div className="page-content">
             <div style={{ display: 'flex', justifyContent: 'flex-start' }}>
                 <button className="btn btn-back" onClick={() => setView('main')}>
                     <i className="fas fa-arrow-left"></i> Volver al Inicio
@@ -3315,7 +3448,7 @@ const DashboardAdmin = () => {
             </div>
             <div className="card">
                 <h3 style={{ color: 'var(--color-blue-dark)', textAlign: 'center' }}>Configuración del Sistema</h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '15px', marginTop: '20px' }}>
+                <div className="config-actions-grid" style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: '15px', marginTop: '20px' }}>
                     <button className="btn btn-dark" onClick={showSystemInfo}>
                         <i className="fas fa-info-circle"></i> Info del Sistema
                     </button>
@@ -3324,9 +3457,6 @@ const DashboardAdmin = () => {
                     </button>
                     <button className="btn btn-orange" onClick={showSecurityPolicies}>
                         <i className="fas fa-shield-alt"></i> Políticas de Seguridad
-                    </button>
-                    <button className="btn btn-institutional" onClick={configureGpsSchedule}>
-                        <i className="fas fa-satellite-dish"></i> Horario de Rastreo GPS
                     </button>
                     <button className="btn btn-green" onClick={runBackup}>
                         <i className="fas fa-download"></i> Backup completo
@@ -3359,7 +3489,7 @@ const DashboardAdmin = () => {
     };
 
     return (
-        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '20px' }}>
+        <div className="page-content">
             <style>
                 {`
                 @media print {
@@ -3372,7 +3502,7 @@ const DashboardAdmin = () => {
                 /* Custom Zone Grid & Cards */
                 .zones-grid {
                     display: grid;
-                    grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+                    grid-template-columns: repeat(auto-fill, minmax(min(100%, 240px), 1fr));
                     gap: 20px;
                     width: 100%;
                     margin-top: 10px;
@@ -3653,6 +3783,82 @@ const DashboardAdmin = () => {
                             </button>
                             <button className="btn btn-dark" onClick={() => setSelectedQR(null)} style={{ flex: 1, height: '45px', margin: 0 }}>
                                 <i className="fas fa-times"></i> CERRAR
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {areaModalOpen && (
+                <div
+                    style={{
+                        position: 'fixed',
+                        inset: 0,
+                        background: 'rgba(15, 23, 42, 0.55)',
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        padding: '20px',
+                        zIndex: 20000
+                    }}
+                    onClick={() => finishCrearAreaModal(null)}
+                >
+                    <div
+                        className="card"
+                        onClick={(event) => event.stopPropagation()}
+                        style={{
+                            width: '100%',
+                            maxWidth: '420px',
+                            margin: 0,
+                            padding: '22px',
+                            textAlign: 'left'
+                        }}
+                    >
+                        <h3 style={{ margin: '0 0 8px', color: 'var(--color-blue-dark)' }}>
+                            Crear nueva área
+                        </h3>
+                        <p style={{ margin: '0 0 14px', fontSize: '13px', color: '#64748b' }}>
+                            Escriba el nombre del área. Quedará disponible para asignarla a usuarios.
+                        </p>
+                        <label style={{ fontWeight: 700, fontSize: '13px', color: '#555' }}>Nombre del área</label>
+                        <input
+                            type="text"
+                            autoFocus
+                            placeholder="Ej. Preescolar, Primaria..."
+                            value={areaModalName}
+                            onChange={(e) => {
+                                setAreaModalName(e.target.value);
+                                setAreaModalError('');
+                            }}
+                            onKeyDown={(e) => {
+                                if (e.key === 'Enter') {
+                                    e.preventDefault();
+                                    confirmCrearAreaModal();
+                                }
+                                if (e.key === 'Escape') finishCrearAreaModal(null);
+                            }}
+                            style={{ width: '100%', margin: '8px 0 6px' }}
+                        />
+                        {areaModalError && (
+                            <p style={{ margin: '0 0 10px', color: '#c0392b', fontSize: '12px', fontWeight: 700 }}>
+                                {areaModalError}
+                            </p>
+                        )}
+                        <div style={{ display: 'flex', gap: '10px', justifyContent: 'flex-end', marginTop: '12px' }}>
+                            <button
+                                type="button"
+                                className="btn btn-back"
+                                onClick={() => finishCrearAreaModal(null)}
+                                style={{ margin: 0, width: 'auto' }}
+                            >
+                                Cancelar
+                            </button>
+                            <button
+                                type="button"
+                                className="btn btn-green"
+                                onClick={confirmCrearAreaModal}
+                                style={{ margin: 0, width: 'auto' }}
+                            >
+                                <i className="fas fa-plus"></i> Crear área
                             </button>
                         </div>
                     </div>

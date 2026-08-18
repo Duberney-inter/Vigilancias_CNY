@@ -13,14 +13,92 @@ const getTeacherColor = (name) => {
     return `hsl(${h}, 75%, 45%)`;
 };
 
+const OPERATIVE_ROLES = ['DOCENTE', 'JEFE DE AREA'];
 const ZONE_RADIUS_M = 50;
-const MAP_DEFAULT_CENTER = [4.8029538364668145, -74.04472357063082];
-// Si un docente no envía su GPS en este lapso (apagó la ubicación, cerró la
-// app, etc.), deja de considerarse "en vivo" y desaparece del mapa.
-const GPS_FRESH_WINDOW_MS = 2 * 60 * 1000;
+const CAMPUS = { lat: 4.8990, lng: -74.0360 };
+const CAMPUS_ZOOM = 17;
+const CAMPUS_MIN_ZOOM = 15;
+const CAMPUS_MAX_ZOOM = 21;
+const TILE_NATIVE_ZOOM = 19;
 
-const isGpsFresh = (actualizadoGps) =>
-    Boolean(actualizadoGps) && (Date.now() - new Date(actualizadoGps).getTime() < GPS_FRESH_WINDOW_MS);
+const addCampusTiles = (L, map) => {
+    L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+        attribution: '&copy; OpenStreetMap contributors',
+        minZoom: CAMPUS_MIN_ZOOM,
+        maxZoom: CAMPUS_MAX_ZOOM,
+        maxNativeZoom: TILE_NATIVE_ZOOM
+    }).addTo(map);
+};
+
+const parseCoord = (value) => {
+    if (value == null || value === '') return null;
+    if (typeof value === 'number') return Number.isFinite(value) ? value : null;
+    const n = parseFloat(String(value).trim().replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+};
+
+const zoneLatLng = (zone) => {
+    const lat = parseCoord(zone?.latitud);
+    const lng = parseCoord(zone?.longitud);
+    if (lat == null || lng == null) return null;
+    if (lat === 0 && lng === 0) return null;
+    return { lat, lng };
+};
+
+const zonesWithCoords = (zones) => (zones || [])
+    .map((zone) => {
+        const point = zoneLatLng(zone);
+        return point ? { zone, lat: point.lat, lng: point.lng } : null;
+    })
+    .filter(Boolean);
+
+const lockCampusView = (map, _placed = [], selected = null) => {
+    if (!map) return;
+    map.invalidateSize();
+    const currentZoom = map.getZoom();
+    const zoom = Number.isFinite(currentZoom)
+        ? Math.min(CAMPUS_MAX_ZOOM, Math.max(currentZoom, CAMPUS_ZOOM))
+        : CAMPUS_ZOOM;
+    if (selected) {
+        map.setView([selected.lat, selected.lng], zoom, { animate: false });
+        return;
+    }
+    map.setView([CAMPUS.lat, CAMPUS.lng], zoom, { animate: false });
+};
+
+const drawZoneCircles = (map, L, zoneGroup, zones, selectedMapZone, resetView = true) => {
+    if (!map || !L || !zoneGroup) return [];
+    zoneGroup.clearLayers();
+
+    const selectedZone = selectedMapZone === 'ALL'
+        ? null
+        : (zones || []).find((z) => String(z.id) === String(selectedMapZone)) || null;
+    const placed = zonesWithCoords(selectedZone ? [selectedZone] : zones);
+    const selectedPoint = selectedZone ? zoneLatLng(selectedZone) : null;
+
+    placed.forEach(({ zone, lat, lng }) => {
+        const circle = L.circle([lat, lng], {
+            color: '#0D0D0D',
+            fillColor: '#424242',
+            fillOpacity: selectedZone ? 0.25 : 0.15,
+            weight: selectedZone ? 3 : 2,
+            dashArray: '5, 5',
+            radius: ZONE_RADIUS_M
+        });
+        circle.bindPopup(`
+            <div style="font-family:'Montserrat', sans-serif; font-size:12px;">
+                <b style="color:#0D0D0D; font-size:13px;">Zona: ${zone.nombre || zone.alias}</b><br/>
+                <b>Alias:</b> ${zone.alias || '—'}<br/>
+                <b>Tipo:</b> ${zone.tipo || '—'}<br/>
+                <b>Horario:</b> ${zone.horario || '—'}
+            </div>
+        `);
+        zoneGroup.addLayer(circle);
+    });
+
+    if (resetView) lockCampusView(map, placed, selectedPoint);
+    return placed;
+};
 
 /**
  * Supervisión en vivo o historial de vigilancias.
@@ -37,6 +115,7 @@ const LiveSupervision = ({
     const [users, setUsers] = useState([]);
     const [zones, setZones] = useState([]);
     const [selectedMapTeacher, setSelectedMapTeacher] = useState('ALL');
+    const [selectedMapRole, setSelectedMapRole] = useState('ALL');
     const [selectedMapZone, setSelectedMapZone] = useState('ALL');
     const [mapTimeframe, setMapTimeframe] = useState(isLiveMode ? 'today' : 'all');
     const [registrosSearch, setRegistrosSearch] = useState('');
@@ -44,7 +123,6 @@ const LiveSupervision = ({
     const [fechaDesde, setFechaDesde] = useState('');
     const [fechaHasta, setFechaHasta] = useState('');
     const [loading, setLoading] = useState(true);
-    const [refreshing, setRefreshing] = useState(false);
 
     const resolveSelectedZone = () => {
         if (selectedMapZone === 'ALL') return null;
@@ -56,20 +134,40 @@ const LiveSupervision = ({
         return String(r.zonaId) === String(zone.id) || r.zonaAlias === zone.alias;
     };
 
+    const getUserRol = (user) => String(user?.rol || '').trim();
+
+    const getRegistroRol = (registro) => {
+        const byId = (users || []).find((u) => String(u.documento) === String(registro?.usuarioId));
+        if (byId) return getUserRol(byId);
+        const byName = (users || []).find((u) => u.nombre === registro?.usuarioNombre);
+        return getUserRol(byName);
+    };
+
+    const matchesSelectedRole = (rol) => selectedMapRole === 'ALL' || rol === selectedMapRole;
+
+    const staffUsers = (users || []).filter((u) => {
+        const rol = getUserRol(u);
+        if (!OPERATIVE_ROLES.includes(rol)) return false;
+        return matchesSelectedRole(rol);
+    });
+
     const isInsideZone = (lat, lng, zone) => {
-        if (!zone?.latitud || !zone?.longitud) return false;
-        const zLat = parseFloat(zone.latitud);
-        const zLng = parseFloat(zone.longitud);
-        if (!zLat || !zLng) return false;
-        return getDistance(lat, lng, zLat, zLng) <= ZONE_RADIUS_M;
+        const point = zoneLatLng(zone);
+        if (!point) return false;
+        return getDistance(lat, lng, point.lat, point.lng) <= ZONE_RADIUS_M;
     };
 
     const mapRef = useRef(null);
+    const mapElRef = useRef(null);
     const markerRefs = useRef({});
-    const activeLayersRef = useRef([]);
+    const zoneLayerRef = useRef(null);
+    const markerLayerRef = useRef(null);
+    const zonesRef = useRef([]);
+    const selectedZoneRef = useRef('ALL');
     const lastFiltersRef = useRef('');
-    const shouldFitRef = useRef(true);
-    const didInitialCenterRef = useRef(false);
+    const [mapReady, setMapReady] = useState(0);
+    zonesRef.current = zones;
+    selectedZoneRef.current = selectedMapZone;
 
     const fetchData = async () => {
         try {
@@ -78,9 +176,9 @@ const LiveSupervision = ({
                 getZonas(),
                 getUsuarios()
             ]);
-            setRegistros((regsData || []).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)));
-            setZones(zonesData || []);
-            setUsers(usersData || []);
+            setRegistros(Array.isArray(regsData) ? [...regsData].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)) : []);
+            setZones(Array.isArray(zonesData) ? zonesData : []);
+            setUsers(Array.isArray(usersData) ? usersData : []);
         } catch (error) {
             console.error('Error cargando supervisión:', error);
         } finally {
@@ -95,27 +193,25 @@ const LiveSupervision = ({
         return () => clearInterval(interval);
     }, [refreshMs, isLiveMode]);
 
-    const handleManualRefresh = async () => {
-        setRefreshing(true);
-        try {
-            await fetchData();
-        } finally {
-            setRefreshing(false);
-        }
-    };
-
     useEffect(() => {
         setMapTimeframe(isLiveMode ? 'today' : 'all');
     }, [isLiveMode]);
+
+    useEffect(() => {
+        if (selectedMapTeacher === 'ALL') return undefined;
+        const stillVisible = staffUsers.some((u) => u.nombre === selectedMapTeacher);
+        if (!stillVisible) setSelectedMapTeacher('ALL');
+        return undefined;
+    }, [selectedMapRole, users, selectedMapTeacher]);
 
     const focusOnMarker = (regId, lat, lng) => {
         const map = mapRef.current;
         const marker = markerRefs.current[regId];
         if (map && marker) {
-            map.setView([parseFloat(lat), parseFloat(lng)], 17);
+            map.setView([parseFloat(lat), parseFloat(lng)], Math.max(map.getZoom() || CAMPUS_ZOOM, 19));
             marker.openPopup();
         } else if (map && lat && lng) {
-            map.setView([parseFloat(lat), parseFloat(lng)], 17);
+            map.setView([parseFloat(lat), parseFloat(lng)], Math.max(map.getZoom() || CAMPUS_ZOOM, 19));
         }
     };
 
@@ -124,240 +220,247 @@ const LiveSupervision = ({
             if (mapRef.current) {
                 mapRef.current.remove();
                 mapRef.current = null;
+                zoneLayerRef.current = null;
+                markerLayerRef.current = null;
             }
             return undefined;
         }
 
-        const timer = setTimeout(() => {
-            const mapDiv = document.getElementById(mapId);
-            if (!mapDiv || !window.L) return;
+        let cancelled = false;
+        let attempts = 0;
+        const sizeTimers = [];
+
+        const paintZones = () => {
+            const map = mapRef.current;
+            const L = window.L;
+            if (!map || !L || !zoneLayerRef.current) return;
+            try {
+                drawZoneCircles(map, L, zoneLayerRef.current, zonesRef.current, selectedZoneRef.current, true);
+            } catch (error) {
+                console.error('Error dibujando zonas en el mapa:', error);
+            }
+        };
+
+        const initMap = () => {
+            if (cancelled) return;
+            const mapDiv = mapElRef.current || document.getElementById(mapId);
+            if (!mapDiv || !window.L) {
+                if (attempts < 40) {
+                    attempts += 1;
+                    window.setTimeout(initMap, 80);
+                }
+                return;
+            }
 
             const L = window.L;
-            let map = mapRef.current;
-            if (!map) {
-                map = L.map(mapId, { zoomControl: true, fadeAnimation: true });
-                mapRef.current = map;
-                L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-                    attribution: '&copy; OpenStreetMap contributors'
-                }).addTo(map);
+            if (mapRef.current && mapRef.current.getContainer() !== mapDiv) {
+                mapRef.current.remove();
+                mapRef.current = null;
+                zoneLayerRef.current = null;
+                markerLayerRef.current = null;
             }
 
-            if (!didInitialCenterRef.current) {
-                map.setView(MAP_DEFAULT_CENTER, 19);
-                didInitialCenterRef.current = true;
-                shouldFitRef.current = false;
-                // Evita que el chequeo de "cambio de filtros" de más abajo
-                // reactive el auto-encuadre en esta misma pasada inicial.
-                lastFiltersRef.current = `${selectedMapTeacher}-${selectedMapZone}-${mapTimeframe}`;
-            }
-
-            if (activeLayersRef.current) {
-                activeLayersRef.current.forEach((layer) => map.removeLayer(layer));
-            }
-            activeLayersRef.current = [];
-            markerRefs.current = {};
-
-            const selectedZone = selectedMapZone === 'ALL'
-                ? null
-                : zones.find((z) => String(z.id) === String(selectedMapZone)) || null;
-
-            const zonesToDraw = selectedZone ? [selectedZone] : zones;
-            zonesToDraw.forEach((z) => {
-                if (z.latitud && z.longitud && parseFloat(z.latitud) !== 0) {
-                    const zoneCircle = L.circle([parseFloat(z.latitud), parseFloat(z.longitud)], {
-                        color: 'var(--color-blue-dark)',
-                        fillColor: 'var(--color-blue-light)',
-                        fillOpacity: selectedZone ? 0.25 : 0.15,
-                        weight: selectedZone ? 3 : 2,
-                        dashArray: '5, 5',
-                        radius: ZONE_RADIUS_M
-                    }).addTo(map);
-
-                    zoneCircle.bindPopup(`
-                        <div style="font-family:'Montserrat', sans-serif; font-size:12px;">
-                            <b style="color:var(--color-blue-dark); font-size:13px;">Zona: ${z.nombre || z.alias}</b><br/>
-                            <b>Alias:</b> ${z.alias}<br/>
-                            <b>Tipo:</b> ${z.tipo}<br/>
-                            <b>Horario:</b> ${z.horario}
-                        </div>
-                    `);
-                    activeLayersRef.current.push(zoneCircle);
-                }
-            });
-
-            const todayStr = new Date().toISOString().split('T')[0];
-            let mapRegs = registros.filter((r) => r.latitud && r.longitud && parseFloat(r.latitud) !== 0);
-
-            if (selectedMapTeacher !== 'ALL') {
-                mapRegs = mapRegs.filter((r) => r.usuarioNombre === selectedMapTeacher);
-            }
-            if (selectedZone) {
-                mapRegs = mapRegs.filter((r) =>
-                    String(r.zonaId) === String(selectedZone.id) || r.zonaAlias === selectedZone.alias
-                );
-            }
-            if (mapTimeframe === 'today') {
-                mapRegs = mapRegs.filter((r) => r.timestamp && String(r.timestamp).startsWith(todayStr));
-            } else if (mapTimeframe === 'last10') {
-                mapRegs = mapRegs.slice(0, 10);
-            }
-
-            const markerList = [];
-
-            mapRegs.forEach((r) => {
-                const lat = parseFloat(r.latitud);
-                const lng = parseFloat(r.longitud);
-                const color = getTeacherColor(r.usuarioNombre);
-                const marker = L.circleMarker([lat, lng], {
-                    radius: 8,
-                    fillColor: color,
-                    color: '#ffffff',
-                    weight: 2.5,
-                    opacity: 1,
-                    fillOpacity: 0.9
-                }).addTo(map);
-
-                marker.bindPopup(`
-                    <div style="font-family:'Montserrat', sans-serif; font-size:12px; min-width:180px;">
-                        <b style="color:${color}; font-size:14px; display:block; margin-bottom:5px;">${r.usuarioNombre}</b>
-                        <b>Zona:</b> ${r.zonaAlias || 'N/A'}<br/>
-                        <b>Fecha/Hora:</b> ${new Date(r.timestamp).toLocaleString()}<br/>
-                        <b>Distancia:</b> ${r.distancia || 0} m
-                    </div>
-                `);
-                markerRefs.current[r.id] = marker;
-                markerList.push(marker);
-                activeLayersRef.current.push(marker);
-            });
-
-            const liveTeachers = users.filter((u) =>
-                (u.rol === 'DOCENTE' || u.rol === 'JEFE DE AREA') &&
-                u.latitud_actual && u.longitud_actual &&
-                parseFloat(u.latitud_actual) !== 0 &&
-                parseFloat(u.longitud_actual) !== 0 &&
-                isGpsFresh(u.actualizado_gps)
-            );
-
-            let filteredLiveTeachers = liveTeachers;
-            if (selectedMapTeacher !== 'ALL') {
-                filteredLiveTeachers = liveTeachers.filter((u) => u.nombre === selectedMapTeacher);
-            }
-            if (selectedZone) {
-                filteredLiveTeachers = filteredLiveTeachers.filter((u) => {
-                    const lat = parseFloat(u.latitud_actual);
-                    const lng = parseFloat(u.longitud_actual);
-                    const inside = getDistance(
-                        lat, lng,
-                        parseFloat(selectedZone.latitud),
-                        parseFloat(selectedZone.longitud)
-                    ) <= ZONE_RADIUS_M;
-                    if (inside) return true;
-                    const latestScan = registros.find((r) => r.usuarioNombre === u.nombre);
-                    return latestScan && (
-                        String(latestScan.zonaId) === String(selectedZone.id) ||
-                        latestScan.zonaAlias === selectedZone.alias
-                    );
+            if (!mapRef.current) {
+                const map = L.map(mapDiv, {
+                    zoomControl: true,
+                    fadeAnimation: false,
+                    scrollWheelZoom: true,
+                    doubleClickZoom: true,
+                    touchZoom: true,
+                    minZoom: CAMPUS_MIN_ZOOM,
+                    maxZoom: CAMPUS_MAX_ZOOM
                 });
+                mapRef.current = map;
+                addCampusTiles(L, map);
+                zoneLayerRef.current = L.layerGroup().addTo(map);
+                markerLayerRef.current = L.layerGroup().addTo(map);
+                map.setView([CAMPUS.lat, CAMPUS.lng], CAMPUS_ZOOM, { animate: false });
             }
 
-            filteredLiveTeachers.forEach((u) => {
+            paintZones();
+            setMapReady((value) => value + 1);
+            [80, 250, 600, 1200].forEach((ms) => {
+                sizeTimers.push(window.setTimeout(() => {
+                    if (cancelled || !mapRef.current) return;
+                    mapRef.current.invalidateSize();
+                }, ms));
+            });
+        };
+
+        const timer = window.setTimeout(initMap, 40);
+        return () => {
+            cancelled = true;
+            window.clearTimeout(timer);
+            sizeTimers.forEach((id) => window.clearTimeout(id));
+        };
+    }, [isLiveMode, mapId]);
+
+    useEffect(() => {
+        if (!isLiveMode) return undefined;
+        const map = mapRef.current;
+        const L = window.L;
+        const zoneGroup = zoneLayerRef.current;
+        if (!map || !L || !zoneGroup) return undefined;
+
+        const viewKey = `zones-${selectedMapZone}-${(zones || []).map((z) => z.id).join(',')}`;
+        const resetView = lastFiltersRef.current !== viewKey;
+        lastFiltersRef.current = viewKey;
+        drawZoneCircles(map, L, zoneGroup, zones, selectedMapZone, resetView);
+        return undefined;
+    }, [isLiveMode, mapReady, zones, selectedMapZone]);
+
+    useEffect(() => {
+        if (!isLiveMode) return undefined;
+        const map = mapRef.current;
+        const L = window.L;
+        const markerGroup = markerLayerRef.current;
+        if (!map || !L || !markerGroup) return undefined;
+
+        markerGroup.clearLayers();
+        markerRefs.current = {};
+
+        const selectedZone = selectedMapZone === 'ALL'
+            ? null
+            : zones.find((z) => String(z.id) === String(selectedMapZone)) || null;
+
+        const todayStr = new Date().toISOString().split('T')[0];
+        let mapRegs = registros.filter((r) => r.latitud && r.longitud && parseFloat(r.latitud) !== 0);
+
+        if (selectedMapTeacher !== 'ALL') {
+            mapRegs = mapRegs.filter((r) => r.usuarioNombre === selectedMapTeacher);
+        }
+        if (selectedMapRole !== 'ALL') {
+            mapRegs = mapRegs.filter((r) => matchesSelectedRole(getRegistroRol(r)));
+        }
+        if (selectedZone) {
+            mapRegs = mapRegs.filter((r) =>
+                String(r.zonaId) === String(selectedZone.id) || r.zonaAlias === selectedZone.alias
+            );
+        }
+        if (mapTimeframe === 'today') {
+            mapRegs = mapRegs.filter((r) => r.timestamp && String(r.timestamp).startsWith(todayStr));
+        } else if (mapTimeframe === 'last10') {
+            mapRegs = mapRegs.slice(0, 10);
+        }
+
+        mapRegs.forEach((r) => {
+            const lat = parseFloat(r.latitud);
+            const lng = parseFloat(r.longitud);
+            const color = getTeacherColor(r.usuarioNombre);
+            const marker = L.circleMarker([lat, lng], {
+                radius: 8,
+                fillColor: color,
+                color: '#ffffff',
+                weight: 2.5,
+                opacity: 1,
+                fillOpacity: 0.9
+            });
+            marker.bindPopup(`
+                <div style="font-family:'Montserrat', sans-serif; font-size:12px; min-width:180px;">
+                    <b style="color:${color}; font-size:14px; display:block; margin-bottom:5px;">${r.usuarioNombre}</b>
+                    <b>Zona:</b> ${r.zonaAlias || 'N/A'}<br/>
+                    <b>Fecha/Hora:</b> ${new Date(r.timestamp).toLocaleString()}<br/>
+                    <b>Distancia:</b> ${r.distancia || 0} m
+                </div>
+            `);
+            markerRefs.current[r.id] = marker;
+            markerGroup.addLayer(marker);
+        });
+
+        const liveTeachers = users.filter((u) =>
+            OPERATIVE_ROLES.includes(getUserRol(u)) &&
+            matchesSelectedRole(getUserRol(u)) &&
+            u.latitud_actual && u.longitud_actual &&
+            parseFloat(u.latitud_actual) !== 0 &&
+            parseFloat(u.longitud_actual) !== 0
+        );
+
+        let filteredLiveTeachers = liveTeachers;
+        if (selectedMapTeacher !== 'ALL') {
+            filteredLiveTeachers = liveTeachers.filter((u) => u.nombre === selectedMapTeacher);
+        }
+        if (selectedZone) {
+            filteredLiveTeachers = filteredLiveTeachers.filter((u) => {
                 const lat = parseFloat(u.latitud_actual);
                 const lng = parseFloat(u.longitud_actual);
-                const color = getTeacherColor(u.nombre);
-                const initials = u.nombre
-                    ? u.nombre.split(' ').filter(Boolean).map((n) => n[0]).slice(0, 2).join('').toUpperCase()
-                    : '??';
-                const isFresh = isGpsFresh(u.actualizado_gps);
-                const statusColor = isFresh ? '#2ecc71' : '#95a5a6';
-                const statusLabel = isFresh ? 'EN VIVO' : 'ÚLTIMA UBICACIÓN';
-                const timeStr = u.actualizado_gps
-                    ? new Date(u.actualizado_gps).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
-                    : 'N/A';
+                if (isInsideZone(lat, lng, selectedZone)) return true;
+                const latestScan = registros.find((r) => r.usuarioNombre === u.nombre);
+                return latestScan && (
+                    String(latestScan.zonaId) === String(selectedZone.id) ||
+                    latestScan.zonaAlias === selectedZone.alias
+                );
+            });
+        }
 
-                const liveIcon = L.divIcon({
-                    className: 'live-marker-div-icon',
-                    html: `
-                        <div class="live-marker-container">
-                            ${isFresh ? `<div class="live-pulse-ring" style="--pulse-color: ${color};"></div>` : ''}
-                            <div class="live-marker-badge" style="background-color: ${color}; border-color: ${isFresh ? '#2ecc71' : '#ffffff'};">
-                                ${initials}
-                            </div>
+        filteredLiveTeachers.forEach((u) => {
+            const lat = parseFloat(u.latitud_actual);
+            const lng = parseFloat(u.longitud_actual);
+            const color = getTeacherColor(u.nombre);
+            const initials = u.nombre
+                ? u.nombre.split(' ').filter(Boolean).map((n) => n[0]).slice(0, 2).join('').toUpperCase()
+                : '??';
+            const isFresh = u.actualizado_gps && (Date.now() - new Date(u.actualizado_gps).getTime() < 15 * 60 * 1000);
+            const statusColor = isFresh ? '#2ecc71' : '#95a5a6';
+            const statusLabel = isFresh ? 'EN VIVO' : 'ÚLTIMA UBICACIÓN';
+            const timeStr = u.actualizado_gps
+                ? new Date(u.actualizado_gps).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+                : 'N/A';
+
+            const liveIcon = L.divIcon({
+                className: 'live-marker-div-icon',
+                html: `
+                    <div class="live-marker-container">
+                        ${isFresh ? `<div class="live-pulse-ring" style="--pulse-color: ${color};"></div>` : ''}
+                        <div class="live-marker-badge" style="background-color: ${color}; border-color: ${isFresh ? '#2ecc71' : '#ffffff'};">
+                            ${initials}
                         </div>
-                    `,
-                    iconSize: [40, 40],
-                    iconAnchor: [20, 20],
-                    popupAnchor: [0, -15]
-                });
-
-                const marker = L.marker([lat, lng], { icon: liveIcon }).addTo(map);
-                marker.bindPopup(`
-                    <div style="font-family:'Montserrat', sans-serif; font-size:12px; min-width:180px;">
-                        <span style="background:${statusColor}; color:white; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:9px; float:right;">
-                            ${statusLabel}
-                        </span>
-                        <b style="color:${color}; font-size:14px; display:block; margin-bottom:5px;">${u.nombre}</b>
-                        <b>Rol:</b> ${u.rol}<br/>
-                        <b>Email:</b> ${u.email || 'N/A'}<br/>
-                        <b>Último reporte GPS:</b> ${timeStr}
                     </div>
-                `);
-                markerRefs.current['live-' + u.documento] = marker;
-                markerList.push(marker);
-                activeLayersRef.current.push(marker);
+                `,
+                iconSize: [40, 40],
+                iconAnchor: [20, 20],
+                popupAnchor: [0, -15]
             });
 
-            if (selectedMapTeacher !== 'ALL' && mapRegs.length > 1) {
-                const chronologicalRegs = [...mapRegs].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
-                const pathPoints = chronologicalRegs.map((r) => [parseFloat(r.latitud), parseFloat(r.longitud)]);
-                const routePolyline = L.polyline(pathPoints, {
-                    color: getTeacherColor(selectedMapTeacher),
-                    weight: 3,
-                    opacity: 0.6,
-                    dashArray: '5, 8',
-                    smoothFactor: 1
-                }).addTo(map);
-                activeLayersRef.current.push(routePolyline);
-            }
+            const marker = L.marker([lat, lng], { icon: liveIcon });
+            marker.bindPopup(`
+                <div style="font-family:'Montserrat', sans-serif; font-size:12px; min-width:180px;">
+                    <span style="background:${statusColor}; color:white; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:9px; float:right;">
+                        ${statusLabel}
+                    </span>
+                    <b style="color:${color}; font-size:14px; display:block; margin-bottom:5px;">${u.nombre}</b>
+                    <b>Rol:</b> ${u.rol}<br/>
+                    <b>Email:</b> ${u.email || 'N/A'}<br/>
+                    <b>Último reporte GPS:</b> ${timeStr}
+                </div>
+            `);
+            markerRefs.current['live-' + u.documento] = marker;
+            markerGroup.addLayer(marker);
+        });
 
-            const currentFilters = `${selectedMapTeacher}-${selectedMapZone}-${mapTimeframe}`;
-            if (lastFiltersRef.current !== currentFilters) {
-                lastFiltersRef.current = currentFilters;
-                shouldFitRef.current = true;
-            }
+        if (selectedMapTeacher !== 'ALL' && mapRegs.length > 1) {
+            const chronologicalRegs = [...mapRegs].sort((a, b) => new Date(a.timestamp) - new Date(b.timestamp));
+            const pathPoints = chronologicalRegs.map((r) => [parseFloat(r.latitud), parseFloat(r.longitud)]);
+            const routePolyline = L.polyline(pathPoints, {
+                color: getTeacherColor(selectedMapTeacher),
+                weight: 3,
+                opacity: 0.6,
+                dashArray: '5, 8',
+                smoothFactor: 1
+            });
+            markerGroup.addLayer(routePolyline);
+        }
 
-            if (shouldFitRef.current) {
-                if (markerList.length > 0) {
-                    const group = new L.featureGroup(markerList);
-                    map.fitBounds(group.getBounds().pad(0.15));
-                } else if (selectedZone?.latitud && selectedZone?.longitud && parseFloat(selectedZone.latitud) !== 0) {
-                    map.setView([parseFloat(selectedZone.latitud), parseFloat(selectedZone.longitud)], 18);
-                } else {
-                    const zoneCoords = zones
-                        .filter((z) => z.latitud && z.longitud && parseFloat(z.latitud) !== 0)
-                        .map((z) => [parseFloat(z.latitud), parseFloat(z.longitud)]);
-                    if (zoneCoords.length > 0) {
-                        map.fitBounds(L.latLngBounds(zoneCoords).pad(0.15));
-                    } else {
-                        map.setView([4.8990, -74.0360], 17);
-                    }
-                }
-                shouldFitRef.current = false;
-            }
-
-            setTimeout(() => map.invalidateSize(), 50);
-            setTimeout(() => map.invalidateSize(), 200);
-            setTimeout(() => map.invalidateSize(), 500);
-        }, 100);
-
-        return () => clearTimeout(timer);
-    }, [registros, zones, users, selectedMapTeacher, selectedMapZone, mapTimeframe, mapId, isLiveMode]);
+        return undefined;
+    }, [isLiveMode, mapReady, registros, users, zones, selectedMapTeacher, selectedMapRole, selectedMapZone, mapTimeframe]);
 
     useEffect(() => {
         if (!isLiveMode) return undefined;
         const mapDiv = document.getElementById(mapId);
         if (!mapDiv || typeof ResizeObserver === 'undefined') return undefined;
         const observer = new ResizeObserver(() => {
-            if (mapRef.current) mapRef.current.invalidateSize();
+            const map = mapRef.current;
+            if (!map) return;
+            map.invalidateSize();
         });
         observer.observe(mapDiv);
         return () => observer.disconnect();
@@ -368,15 +471,15 @@ const LiveSupervision = ({
             mapRef.current.remove();
             mapRef.current = null;
         }
+        zoneLayerRef.current = null;
+        markerLayerRef.current = null;
     }, []);
 
     const selectedZoneFilter = resolveSelectedZone();
-    const teachersList = users.filter((u) => u.rol === 'DOCENTE' || u.rol === 'JEFE DE AREA');
+    const teachersList = staffUsers;
     const teacherUbicaciones = [];
     teachersList.forEach((t) => {
-        const hasLiveGPS = t.latitud_actual && t.longitud_actual
-            && parseFloat(t.latitud_actual) !== 0 && parseFloat(t.longitud_actual) !== 0
-            && isGpsFresh(t.actualizado_gps);
+        const hasLiveGPS = t.latitud_actual && t.longitud_actual && parseFloat(t.latitud_actual) !== 0 && parseFloat(t.longitud_actual) !== 0;
         const latestScan = registros.find((r) => r.usuarioNombre === t.nombre);
 
         if (selectedZoneFilter) {
@@ -390,6 +493,7 @@ const LiveSupervision = ({
         }
 
         if (hasLiveGPS) {
+            const isFresh = t.actualizado_gps && (Date.now() - new Date(t.actualizado_gps).getTime() < 15 * 60 * 1000);
             teacherUbicaciones.push({
                 id: 'live-' + t.documento,
                 nombre: t.nombre,
@@ -397,8 +501,8 @@ const LiveSupervision = ({
                 longitud: parseFloat(t.longitud_actual),
                 timestamp: t.actualizado_gps,
                 isLive: true,
-                isFresh: true,
-                labelText: 'Ubicación GPS (Activo)',
+                isFresh,
+                labelText: isFresh ? 'Ubicación GPS (Activo)' : 'Ubicación GPS (Inactivo)',
                 timeAgoStr: t.actualizado_gps
                     ? new Date(t.actualizado_gps).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                     : 'N/A'
@@ -453,6 +557,9 @@ const LiveSupervision = ({
         if (selectedMapTeacher !== 'ALL') {
             list = list.filter((r) => r.usuarioNombre === selectedMapTeacher);
         }
+        if (selectedMapRole !== 'ALL') {
+            list = list.filter((r) => matchesSelectedRole(getRegistroRol(r)));
+        }
         if (selectedZoneFilter) {
             list = list.filter((r) => registroMatchesZone(r, selectedZoneFilter));
         }
@@ -487,34 +594,23 @@ const LiveSupervision = ({
                 dateStr.includes(term) ||
                 timeStr.includes(term);
         });
-    }, [registros, mapTimeframe, selectedMapTeacher, selectedZoneFilter, tipoFilter, fechaDesde, fechaHasta, registrosSearch, zones]);
+    }, [registros, mapTimeframe, selectedMapTeacher, selectedMapRole, selectedZoneFilter, tipoFilter, fechaDesde, fechaHasta, registrosSearch, zones, users]);
 
     const tablePager = usePagination(
         filteredTableRegs,
         10,
-        `${selectedMapTeacher}|${selectedMapZone}|${mapTimeframe}|${tipoFilter}|${fechaDesde}|${fechaHasta}|${registrosSearch}|${mode}`
+        `${selectedMapTeacher}|${selectedMapRole}|${selectedMapZone}|${mapTimeframe}|${tipoFilter}|${fechaDesde}|${fechaHasta}|${registrosSearch}|${mode}`
     );
 
-    if (loading) {
-        return (
-            <div className="card" style={{ padding: '40px', textAlign: 'center' }}>
-                <span className="loading-spinner" style={{ borderTopColor: 'var(--color-green-primary)', borderColor: 'rgba(0,0,0,0.1)' }}></span>
-                <p style={{ color: 'var(--text-light)', marginTop: '10px' }}>
-                    {isLiveMode ? 'Cargando supervisión en vivo...' : 'Cargando historial de vigilancias...'}
-                </p>
-            </div>
-        );
-    }
-
     return (
-        <div style={{ width: '100%', display: 'flex', flexDirection: 'column', gap: '20px', padding: '0 20px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'white', padding: '15px 25px', borderRadius: '15px', boxShadow: '0 4px 15px rgba(0,0,0,0.05)' }}>
-                <div style={{ display: 'flex', gap: '15px', alignItems: 'center' }}>
+        <div className="page-content">
+            <div className="page-toolbar">
+                <div className="page-toolbar-start">
                     <button className="btn btn-back" onClick={onBack} style={{ margin: 0 }}>
                         <i className="fas fa-arrow-left"></i> Volver al Inicio
                     </button>
                     <div>
-                        <h2 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '20px', fontWeight: '800' }}>
+                        <h2>
                             {isLiveMode ? 'Supervisión Satelital en Vivo' : 'Historial de Vigilancias'}
                         </h2>
                         <p style={{ margin: '4px 0 0 0', color: '#64748b', fontSize: '13px', fontWeight: '600' }}>
@@ -526,7 +622,7 @@ const LiveSupervision = ({
                 </div>
                 {isLiveMode && (
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                        <span className="badge" style={{ background: '#2ecc71', fontWeight: 'bold' }}>🔴 Transmisión Activa</span>
+                        <span className="badge" style={{ background: '#2ecc71', fontWeight: 'bold' }}>Transmisión activa</span>
                     </div>
                 )}
             </div>
@@ -535,36 +631,27 @@ const LiveSupervision = ({
             <div className="map-supervision-grid">
                 <div className="card map-panel" style={{ textAlign: 'left' }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                        <h3 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '16px', fontWeight: 'bold' }}>🌎 Mapa del Campus y Rondas</h3>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
-                            <small style={{ color: '#888' }}><i className="fas fa-satellite"></i> Actualización cada {Math.round(refreshMs / 1000)}s</small>
-                            <button
-                                type="button"
-                                onClick={handleManualRefresh}
-                                disabled={refreshing}
-                                title="Refrescar ahora"
-                                style={{
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '6px',
-                                    padding: '6px 10px',
-                                    fontSize: '11px',
-                                    fontWeight: 'bold',
-                                    borderRadius: '8px',
-                                    border: '1px solid #e2e8f0',
-                                    background: refreshing ? '#f1f5f9' : '#ffffff',
-                                    color: 'var(--color-blue-dark)',
-                                    cursor: refreshing ? 'default' : 'pointer',
-                                    margin: 0,
-                                    width: 'auto'
-                                }}
-                            >
-                                <i className={`fas fa-sync-alt ${refreshing ? 'fa-spin' : ''}`}></i>
-                                {refreshing ? 'Actualizando...' : 'Refrescar'}
-                            </button>
-                        </div>
+                    <div>
+                        <h3 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '16px', fontWeight: 'bold' }}>Mapa del campus y rondas</h3>
+                        <small style={{ color: '#64748b', display: 'block', marginTop: '4px' }}>
+                            Círculos de 50 m por zona, visibles aunque no haya escaneos.
+                        </small>
                     </div>
-                    <div id={mapId} className="map-panel-canvas"></div>
+                    <small style={{ color: '#888' }}><i className="fas fa-satellite"></i> Actualización cada {Math.round(refreshMs / 1000)}s</small>
+                    </div>
+                    <div className="map-panel-canvas-wrap">
+                        <div
+                            ref={mapElRef}
+                            id={mapId}
+                            className="map-panel-canvas"
+                        ></div>
+                        {loading && (
+                            <div className="map-panel-loading">
+                                <span className="loading-spinner" style={{ borderTopColor: 'var(--color-green-primary)', borderColor: 'rgba(0,0,0,0.1)' }}></span>
+                                <span>Cargando zonas del campus...</span>
+                            </div>
+                        )}
+                    </div>
                 </div>
 
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
@@ -573,14 +660,26 @@ const LiveSupervision = ({
                             <i className="fas fa-sliders-h"></i> Filtros de Mapa
                         </h4>
                         <div style={{ marginBottom: '15px' }}>
-                            <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#555', display: 'block', marginBottom: '5px' }}>Seguimiento por Docente:</label>
+                            <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#555', display: 'block', marginBottom: '5px' }}>Filtro por Rol:</label>
+                            <select
+                                value={selectedMapRole}
+                                onChange={(e) => setSelectedMapRole(e.target.value)}
+                                style={{ padding: '10px', fontSize: '13px', borderRadius: '8px', border: '1px solid #ddd', width: '100%', textAlign: 'left' }}
+                            >
+                                <option value="ALL">-- Todos los roles --</option>
+                                <option value="DOCENTE">DOCENTE</option>
+                                <option value="JEFE DE AREA">JEFE DE AREA</option>
+                            </select>
+                        </div>
+                        <div style={{ marginBottom: '15px' }}>
+                            <label style={{ fontSize: '12px', fontWeight: 'bold', color: '#555', display: 'block', marginBottom: '5px' }}>Seguimiento por persona:</label>
                             <select
                                 value={selectedMapTeacher}
                                 onChange={(e) => setSelectedMapTeacher(e.target.value)}
                                 style={{ padding: '10px', fontSize: '13px', borderRadius: '8px', border: '1px solid #ddd', width: '100%', textAlign: 'left' }}
                             >
-                                <option value="ALL">-- Todos los Docentes --</option>
-                                {users.filter((u) => u.rol === 'DOCENTE' || u.rol === 'JEFE DE AREA').map((u) => u.nombre).filter(Boolean).sort().map((name) => (
+                                <option value="ALL">-- Todas las personas --</option>
+                                {staffUsers.map((u) => u.nombre).filter(Boolean).sort().map((name) => (
                                     <option key={name} value={name}>{name}</option>
                                 ))}
                             </select>
@@ -619,7 +718,11 @@ const LiveSupervision = ({
                         </h4>
                         <div style={{ overflowY: 'auto', flex: 1, maxHeight: '280px', display: 'flex', flexDirection: 'column', gap: '10px', paddingRight: '5px' }}>
                             {teacherUbicaciones.length === 0 ? (
-                                <p style={{ color: '#888', fontSize: '13px', textAlign: 'center' }}>No hay docentes registrados.</p>
+                                <p style={{ color: '#888', fontSize: '13px', textAlign: 'center' }}>
+                                    {selectedMapRole === 'ALL'
+                                        ? 'No hay docentes ni jefes registrados.'
+                                        : `No hay personas con el rol ${selectedMapRole}.`}
+                                </p>
                             ) : (
                                 teacherUbicaciones.map((item) => {
                                     const color = getTeacherColor(item.nombre);
@@ -660,9 +763,9 @@ const LiveSupervision = ({
             )}
 
             {!isLiveMode && (
-            <div className="card" style={{ margin: 0, padding: '20px', textAlign: 'left' }}>
-                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '12px', alignItems: 'end' }}>
-                    <div style={{ flex: '2 1 220px' }}>
+            <div className="card" style={{ margin: 0, padding: '16px', textAlign: 'left' }}>
+                <div className="filters-grid">
+                    <div>
                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Buscar</label>
                         <input
                             type="text"
@@ -672,20 +775,32 @@ const LiveSupervision = ({
                             style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', margin: 0 }}
                         />
                     </div>
-                    <div style={{ minWidth: '180px' }}>
-                        <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Docente</label>
+                    <div>
+                        <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Rol</label>
+                        <select
+                            value={selectedMapRole}
+                            onChange={(e) => setSelectedMapRole(e.target.value)}
+                            style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc' }}
+                        >
+                            <option value="ALL">Todos los roles</option>
+                            <option value="DOCENTE">DOCENTE</option>
+                            <option value="JEFE DE AREA">JEFE DE AREA</option>
+                        </select>
+                    </div>
+                    <div>
+                        <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Persona</label>
                         <select
                             value={selectedMapTeacher}
                             onChange={(e) => setSelectedMapTeacher(e.target.value)}
                             style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc' }}
                         >
-                            <option value="ALL">Todos los docentes</option>
-                            {users.filter((u) => u.rol === 'DOCENTE' || u.rol === 'JEFE DE AREA').map((u) => u.nombre).filter(Boolean).sort().map((name) => (
+                            <option value="ALL">Todas las personas</option>
+                            {staffUsers.map((u) => u.nombre).filter(Boolean).sort().map((name) => (
                                 <option key={name} value={name}>{name}</option>
                             ))}
                         </select>
                     </div>
-                    <div style={{ minWidth: '180px' }}>
+                    <div>
                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Zona</label>
                         <select
                             value={selectedMapZone}
@@ -698,7 +813,7 @@ const LiveSupervision = ({
                             ))}
                         </select>
                     </div>
-                    <div style={{ minWidth: '140px' }}>
+                    <div>
                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Tipo</label>
                         <select
                             value={tipoFilter}
@@ -711,7 +826,7 @@ const LiveSupervision = ({
                             <option value="OTRO">OTRO</option>
                         </select>
                     </div>
-                    <div style={{ minWidth: '150px' }}>
+                    <div>
                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Periodo</label>
                         <select
                             value={mapTimeframe}
@@ -723,7 +838,7 @@ const LiveSupervision = ({
                             <option value="all">Historial completo</option>
                         </select>
                     </div>
-                    <div style={{ minWidth: '150px' }}>
+                    <div>
                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Desde</label>
                         <input
                             type="date"
@@ -733,7 +848,7 @@ const LiveSupervision = ({
                             style={{ width: '100%', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0', background: '#f8fafc', margin: 0 }}
                         />
                     </div>
-                    <div style={{ minWidth: '150px' }}>
+                    <div>
                         <label style={{ fontSize: '12px', fontWeight: '700', color: '#475569', display: 'block', marginBottom: '6px' }}>Hasta</label>
                         <input
                             type="date"
@@ -750,6 +865,7 @@ const LiveSupervision = ({
                             onClick={() => {
                                 setRegistrosSearch('');
                                 setSelectedMapTeacher('ALL');
+                                setSelectedMapRole('ALL');
                                 setSelectedMapZone('ALL');
                                 setTipoFilter('ALL');
                                 setMapTimeframe('all');
@@ -783,7 +899,7 @@ const LiveSupervision = ({
                         placeholder="🔍 Buscar docente, zona, tipo o fecha..."
                         value={registrosSearch}
                         onChange={(e) => setRegistrosSearch(e.target.value)}
-                        style={{ padding: '10px 15px', border: '1px solid #e2e8f0', borderRadius: '8px', width: '320px', fontSize: '13px', margin: 0, background: '#f8fafc', textAlign: 'left' }}
+                        style={{ padding: '10px 15px', border: '1px solid #e2e8f0', borderRadius: '8px', width: '100%', maxWidth: '360px', fontSize: '13px', margin: 0, background: '#f8fafc', textAlign: 'left', minWidth: 0, boxSizing: 'border-box' }}
                     />
                     )}
                 </div>

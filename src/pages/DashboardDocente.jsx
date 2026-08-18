@@ -11,8 +11,8 @@ import { PaginationBar, slicePage } from '../components/PaginationBar';
 // html5-qrcode es una librería pesada; solo se descarga cuando el docente abre el escáner.
 const QRScanner = lazy(() => import('../components/QRScanner'));
 
-// Tolerancia GPS documentada en el README/backend: 50 metros del punto oficial de la zona.
-const MAX_DISTANCE_METERS = 50;
+// Tolerancia GPS documentada en el README/backend: 4 metros del punto oficial de la zona.
+const MAX_DISTANCE_METERS = 4;
 
 // Franja horaria en la que se espera GPS activo (config. por el admin);
 // estos son solo el valor por defecto mientras carga la configuración real.
@@ -540,7 +540,11 @@ const DashboardDocente = () => {
             setManualDoc('');
         } catch (error) {
             console.error("Error in registration:", error);
-            Swal.fire('Error', 'Problema al procesar el registro: ' + error.message, 'error');
+            if (error.code === 'duplicate-registro') {
+                Swal.fire('Ya Registrado', error.message, 'warning');
+            } else {
+                Swal.fire('Error', 'Problema al procesar el registro: ' + error.message, 'error');
+            }
         }
     }, [user, location, checkSchedule, saveToQueue, zones]);
 
