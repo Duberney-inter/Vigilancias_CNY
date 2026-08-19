@@ -1,4 +1,4 @@
-import { Pool } from '@neondatabase/serverless';
+import { neon } from '@neondatabase/serverless';
 import { PGlite } from '@electric-sql/pglite';
 import { rm } from 'fs/promises';
 import { mockZonas } from '../../src/utils/mockData.js';
@@ -7,7 +7,10 @@ const isLocalDb = process.env.USE_LOCAL_DB === 'true';
 const LOCAL_PGDATA = './local_pgdata';
 
 let localDb = null;
-let pool = null;
+// Driver HTTP de Neon (sobre fetch), no el Pool por WebSocket: el runtime de
+// Vercel no trae el WebSocket global que ese Pool necesita, y fallaba con un
+// ErrorEvent sin mensaje útil. El HTTP driver no depende de eso.
+let sql = null;
 
 async function loadSeedUsuarios() {
     try {
@@ -311,17 +314,15 @@ if (isLocalDb) {
     dbReady = initLocalDatabase();
 } else {
     console.log('[DB] Usando Base de Datos en la Nube (Neon)...');
-    pool = new Pool({
-        connectionString: process.env.DATABASE_URL
-    });
+    sql = neon(process.env.DATABASE_URL, { fullResults: true });
 
     dbReady = (async () => {
         try {
             for (const q of CREATE_TABLE_QUERIES) {
-                await pool.query(q);
+                await sql(q);
             }
             for (const q of ALTER_QUERIES) {
-                await pool.query(q);
+                await sql(q);
             }
             console.log('[DB] Esquema y columnas de geolocalización en vivo validados en Neon.');
         } catch (err) {
@@ -340,5 +341,5 @@ export const query = async (text, params) => {
     if (isLocalDb) {
         return await localDb.query(text, params);
     }
-    return await pool.query(text, params);
+    return await sql(text, params);
 };
