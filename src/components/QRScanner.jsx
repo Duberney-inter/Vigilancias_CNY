@@ -48,11 +48,16 @@ const QRScanner = ({ onScanSuccess }) => {
             const html5QrCode = new Html5Qrcode("v8-scanner-root");
             scannerRef.current = html5QrCode;
 
-            const isMobile = /iPhone|iPad|iPod|Android/i.test(navigator.userAgent);
-
             const config = {
                 fps: 15,
-                qrbox: { width: isMobile ? 240 : 300, height: isMobile ? 240 : 300 },
+                // Caja de escaneo proporcional al tamaño real de la cámara (85% del lado
+                // menor) en vez de un tamaño fijo: amplía el rango de lectura (códigos más
+                // lejos, más pequeños o no perfectamente centrados) en cualquier dispositivo.
+                qrbox: (viewfinderWidth, viewfinderHeight) => {
+                    const minEdge = Math.min(viewfinderWidth, viewfinderHeight);
+                    const boxSize = Math.floor(minEdge * 0.85);
+                    return { width: boxSize, height: boxSize };
+                },
                 aspectRatio: 1.0
             };
 

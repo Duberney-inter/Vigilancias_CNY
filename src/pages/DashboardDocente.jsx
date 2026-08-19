@@ -64,6 +64,15 @@ const DashboardDocente = () => {
             .catch((err) => console.error('Error cargando horario de rastreo GPS:', err));
     }, []);
 
+    // Precarga el chunk del escáner QR apenas hay sesión (llegar aquí ya
+    // implica que hubo internet, por el login). Así, si luego se pierde la
+    // conexión, el Service Worker ya lo tiene cacheado y el escáner abre igual
+    // — de lo contrario, abrirlo por primera vez sin red fallaría.
+    useEffect(() => {
+        if (!user) return;
+        import('../components/QRScanner').catch((err) => console.error('Error precargando escáner QR:', err));
+    }, [user?.documento, user?.uid]);
+
     // Precarga las zonas en memoria e IndexedDB apenas hay sesión (no solo al
     // abrir "Historial"), para poder identificar la zona escaneada sin
     // conexión — incluso si la página se recarga estando offline.
