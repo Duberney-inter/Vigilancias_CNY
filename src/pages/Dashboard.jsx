@@ -1,7 +1,7 @@
 import React, { Suspense, lazy } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Header from '../components/Header';
-import { createLog } from '../lib/api';
+import { createLog, logout as logoutSession } from '../lib/api';
 import ChangePasswordModal from '../components/ChangePasswordModal';
 import Swal from 'sweetalert2';
 
@@ -36,7 +36,7 @@ const Dashboard = () => {
         } catch (e) {
             console.error("Error al registrar log de cierre de sesión:", e);
         }
-        localStorage.removeItem('usuario_cny_2026');
+        logoutSession();
         navigate('/login');
     };
 

@@ -3,13 +3,31 @@
  * Cliente REST hacia /api/* (PostgreSQL vía Neon o PGlite local)
  */
 
+import { kvSet, kvDelete } from './offlineDb';
+
 const API_BASE = '/api';
+const SESSION_KEY = 'usuario_cny_2026';
 
 // ---------- Token Management ----------
 
 function getToken() {
-    const session = JSON.parse(localStorage.getItem('usuario_cny_2026') || 'null');
+    const session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
     return session?.token || '';
+}
+
+// Guarda la sesión en localStorage (lectura síncrona en toda la app) y
+// además copia el token a IndexedDB, que es lo único que el Service Worker
+// puede leer para sincronizar la cola offline en segundo plano.
+function persistSession(sessionData) {
+    localStorage.setItem(SESSION_KEY, JSON.stringify(sessionData));
+    if (sessionData?.token) {
+        kvSet('authToken', sessionData.token).catch((err) => console.error('No se pudo guardar el token en IndexedDB:', err));
+    }
+}
+
+function clearSession() {
+    localStorage.removeItem(SESSION_KEY);
+    kvDelete('authToken').catch(() => {});
 }
 
 function authHeaders() {
@@ -30,7 +48,7 @@ async function handleResponse(res) {
         // (p. ej. contraseña actual incorrecta).
         const isSessionError = res.status === 401 && !['invalid-current-password', 'invalid-credentials'].includes(data.error);
         if (isSessionError && !isOnLoginScreen()) {
-            localStorage.removeItem('usuario_cny_2026');
+            clearSession();
             window.location.href = '/login';
         }
 
@@ -50,16 +68,24 @@ export async function login(user, password) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ user, password })
     });
-    return handleResponse(res);
+    const data = await handleResponse(res);
+    if (data.token) {
+        persistSession({ datos: data.user, token: data.token, entrada: new Date().getTime() });
+    }
+    return data;
+}
+
+export function logout() {
+    clearSession();
 }
 
 export async function validateSession() {
     const res = await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() });
     const data = await handleResponse(res);
-    const session = JSON.parse(localStorage.getItem('usuario_cny_2026') || 'null');
+    const session = JSON.parse(localStorage.getItem(SESSION_KEY) || 'null');
     if (session?.token && data.user) {
         session.datos = data.user;
-        localStorage.setItem('usuario_cny_2026', JSON.stringify(session));
+        persistSession(session);
     }
     return data;
 }

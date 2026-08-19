@@ -2,7 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { BrowserRouter as Router, Routes, Route, Navigate } from 'react-router-dom';
 import Login from './pages/Login';
 import Dashboard from './pages/Dashboard';
-import { validateSession } from './lib/api';
+import { validateSession, logout as clearSession } from './lib/api';
 
 const ProtectedRoute = ({ children }) => {
     const [status, setStatus] = useState('checking');
@@ -16,8 +16,15 @@ const ProtectedRoute = ({ children }) => {
 
         validateSession()
             .then(() => setStatus('ok'))
-            .catch(() => {
-                localStorage.removeItem('usuario_cny_2026');
+            .catch((error) => {
+                // Offline-first: si falló por falta de red (sin respuesta del
+                // servidor, error.status indefinido), no cerrar sesión — se
+                // confía en la sesión guardada localmente hasta recuperar señal.
+                if (!navigator.onLine || error.status === undefined) {
+                    setStatus('ok');
+                    return;
+                }
+                clearSession();
                 setStatus('fail');
             });
     }, []);

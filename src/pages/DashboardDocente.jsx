@@ -4,6 +4,7 @@ import { useGeoLocation } from '../hooks/useGeoLocation';
 import { getDistance } from '../utils/geoUtils';
 import { schoolData } from '../config/schoolData';
 import { getZonas, getZona, getRegistros, createRegistro, createNovedad, createLog, getHorarios, updateUbicacionVivo, getComunicados, markComunicadoLeido, getEquipo, getConfig } from '../lib/api';
+import { kvGet, kvSet } from '../lib/offlineDb';
 
 import { useOfflineSync } from '../hooks/useOfflineSync';
 import { PaginationBar, slicePage } from '../components/PaginationBar';
@@ -63,12 +64,20 @@ const DashboardDocente = () => {
             .catch((err) => console.error('Error cargando horario de rastreo GPS:', err));
     }, []);
 
-    // Precarga las zonas en memoria apenas hay sesión (no solo al abrir "Historial"),
-    // para poder identificar la zona escaneada aunque luego se pierda la conexión.
+    // Precarga las zonas en memoria e IndexedDB apenas hay sesión (no solo al
+    // abrir "Historial"), para poder identificar la zona escaneada sin
+    // conexión — incluso si la página se recarga estando offline.
     useEffect(() => {
         if (!user) return;
+        kvGet('zonas_cache').then((cached) => {
+            if (Array.isArray(cached) && cached.length) setZones(cached);
+        }).catch(() => {});
+
         getZonas()
-            .then(setZones)
+            .then((data) => {
+                setZones(data);
+                kvSet('zonas_cache', data).catch((err) => console.error('Error cacheando zonas en IndexedDB:', err));
+            })
             .catch((err) => console.error('Error precargando zonas:', err));
     }, [user?.documento, user?.uid]);
 

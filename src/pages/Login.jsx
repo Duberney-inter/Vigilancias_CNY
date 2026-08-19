@@ -41,14 +41,8 @@ const Login = () => {
             console.log("Login successful!");
 
             const authenticatedUser = data.user;
-
-            // Guardar sesión (el log de inicio lo registra la API).
-            const sessionData = {
-                datos: authenticatedUser,
-                token: data.token,
-                entrada: new Date().getTime()
-            };
-            localStorage.setItem('usuario_cny_2026', JSON.stringify(sessionData));
+            // La sesión (localStorage + token espejado en IndexedDB para el
+            // Service Worker) ya la guarda login() en lib/api.js.
 
             Swal.fire({
                 icon: 'success',

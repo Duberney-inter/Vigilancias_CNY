@@ -1,32 +1,42 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { syncRegistros } from '../lib/api';
+import { queueAdd, queueGetAll, queueRemoveIds, queueCount } from '../lib/offlineDb';
 import Swal from 'sweetalert2';
+
+const SYNC_TAG_PREFIX = 'sync-';
+
+async function registerBackgroundSync(collectionName) {
+    try {
+        if (!('serviceWorker' in navigator)) return;
+        const registration = await navigator.serviceWorker.ready;
+        if (!registration.sync) return; // Background Sync no soportado (ej. Safari/iOS)
+        await registration.sync.register(`${SYNC_TAG_PREFIX}${collectionName}`);
+    } catch (err) {
+        console.error('No se pudo registrar Background Sync:', err);
+    }
+}
 
 export const useOfflineSync = (collectionName) => {
     const [queueLength, setQueueLength] = useState(0);
-    const STORAGE_KEY = `offline_queue_${collectionName}`;
     const syncingRef = useRef(false);
 
-    const updateQueueLength = useCallback(() => {
+    const updateQueueLength = useCallback(async () => {
         try {
-            const queue = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-            setQueueLength(Array.isArray(queue) ? queue.length : 0);
+            const count = await queueCount(collectionName);
+            setQueueLength(count);
         } catch {
             setQueueLength(0);
         }
-    }, [STORAGE_KEY]);
+    }, [collectionName]);
 
-    const saveToQueue = (data) => {
-        let queue = [];
+    const saveToQueue = useCallback(async (data) => {
         try {
-            queue = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-            if (!Array.isArray(queue)) queue = [];
-        } catch {
-            queue = [];
+            await queueAdd(collectionName, data);
+        } catch (err) {
+            console.error('Error guardando en cola offline (IndexedDB):', err);
         }
-        queue.push({ ...data, queuedAt: new Date().toISOString() });
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(queue));
-        updateQueueLength();
+        await updateQueueLength();
+        await registerBackgroundSync(collectionName);
 
         Swal.fire({
             icon: 'warning',
@@ -37,15 +47,14 @@ export const useOfflineSync = (collectionName) => {
             showConfirmButton: false,
             timer: 3000
         });
-    };
+    }, [collectionName, updateQueueLength]);
 
     const syncQueue = useCallback(async () => {
         if (!navigator.onLine || syncingRef.current) return;
 
         let queue = [];
         try {
-            queue = JSON.parse(localStorage.getItem(STORAGE_KEY)) || [];
-            if (!Array.isArray(queue)) queue = [];
+            queue = await queueGetAll(collectionName);
         } catch {
             return;
         }
@@ -53,18 +62,14 @@ export const useOfflineSync = (collectionName) => {
 
         syncingRef.current = true;
         try {
-            const itemsToSync = queue.map((item) => {
-                const { queuedAt, ...rest } = item;
-                return {
-                    ...rest,
-                    syncedAt: new Date().toISOString()
-                };
-            });
+            const itemsToSync = queue.map(({ _localId, collection, queuedAt, ...rest }) => ({
+                ...rest,
+                syncedAt: new Date().toISOString()
+            }));
 
             await syncRegistros(itemsToSync);
-
-            localStorage.setItem(STORAGE_KEY, JSON.stringify([]));
-            updateQueueLength();
+            await queueRemoveIds(queue.map((item) => item._localId));
+            await updateQueueLength();
 
             Swal.fire({
                 icon: 'success',
@@ -81,7 +86,7 @@ export const useOfflineSync = (collectionName) => {
         } finally {
             syncingRef.current = false;
         }
-    }, [STORAGE_KEY, updateQueueLength]);
+    }, [collectionName, updateQueueLength]);
 
     useEffect(() => {
         updateQueueLength();
@@ -91,11 +96,21 @@ export const useOfflineSync = (collectionName) => {
         window.addEventListener('online', handleOnline);
         const interval = setInterval(syncQueue, 30000);
 
+        // Si el Service Worker sincronizó en segundo plano (Background Sync,
+        // incluso con la pestaña cerrada), avisa para refrescar el contador.
+        const handleSwMessage = (event) => {
+            if (event.data?.type === 'offline-sync-complete' && event.data?.collection === collectionName) {
+                updateQueueLength();
+            }
+        };
+        navigator.serviceWorker?.addEventListener?.('message', handleSwMessage);
+
         return () => {
             window.removeEventListener('online', handleOnline);
             clearInterval(interval);
+            navigator.serviceWorker?.removeEventListener?.('message', handleSwMessage);
         };
-    }, [syncQueue, updateQueueLength]);
+    }, [syncQueue, updateQueueLength, collectionName]);
 
     return { saveToQueue, queueLength, syncQueue };
 };
