@@ -14,7 +14,7 @@ const getTeacherColor = (name) => {
 };
 
 const OPERATIVE_ROLES = ['DOCENTE', 'JEFE DE AREA'];
-const ZONE_RADIUS_M = 50;
+const ZONE_RADIUS_M = 10;
 const CAMPUS = { lat: 4.8990, lng: -74.0360 };
 const CAMPUS_ZOOM = 17;
 const CAMPUS_MIN_ZOOM = 15;

@@ -14,7 +14,7 @@ import { PaginationBar, slicePage } from '../components/PaginationBar';
 
 ChartJS.register(ArcElement, Tooltip, Legend, CategoryScale, LinearScale, BarElement, Title, PointElement, LineElement, DoughnutController);
 
-const ZONE_RADIUS_M = 50;
+const ZONE_RADIUS_M = 10;
 
 const DashboardDirector = ({ readOnly = false }) => {
     const [view, setView] = useState('main'); // 'main', 'kpis', 'registros', 'notif', 'reports', 'novedades_list', 'cumplimiento'
