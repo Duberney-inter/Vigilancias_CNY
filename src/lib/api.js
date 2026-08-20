@@ -119,11 +119,11 @@ export async function getConfig() {
     return handleResponse(res);
 }
 
-export async function updateConfig(gpsDesde, gpsHasta) {
+export async function updateConfig(gpsDesde, gpsHasta, gpsDias) {
     const res = await fetch(`${API_BASE}/config`, {
         method: 'PUT',
         headers: authHeaders(),
-        body: JSON.stringify({ gpsDesde, gpsHasta })
+        body: JSON.stringify({ gpsDesde, gpsHasta, gpsDias })
     });
     return handleResponse(res);
 }

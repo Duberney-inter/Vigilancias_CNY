@@ -15,12 +15,16 @@ const QRScanner = lazy(() => import('../components/QRScanner'));
 // Tolerancia GPS documentada en el README/backend: 10 metros del punto oficial de la zona.
 const MAX_DISTANCE_METERS = 10;
 
-// Franja horaria en la que se espera GPS activo (config. por el admin);
-// estos son solo el valor por defecto mientras carga la configuración real.
-const DEFAULT_GPS_WINDOW = { gpsDesde: '06:00', gpsHasta: '18:00' };
+// Franja horaria y días en los que se espera GPS activo (config. por el
+// admin); esto es solo el valor por defecto mientras carga la config real.
+const DEFAULT_GPS_WINDOW = { gpsDesde: '06:00', gpsHasta: '18:00', gpsDias: [1, 2, 3, 4, 5] };
 
-const isWithinTimeWindow = (desde, hasta) => {
+const isWithinTrackingWindow = (desde, hasta, dias) => {
     const now = new Date();
+    // JS: 0=Domingo..6=Sábado. Convención del sistema: 1=Lunes..7=Domingo.
+    const isoDay = now.getDay() === 0 ? 7 : now.getDay();
+    if (Array.isArray(dias) && dias.length > 0 && !dias.includes(isoDay)) return false;
+
     const currentMinutes = now.getHours() * 60 + now.getMinutes();
     const [startH, startM] = String(desde).split(':').map(Number);
     const [endH, endM] = String(hasta).split(':').map(Number);
@@ -60,7 +64,7 @@ const DashboardDocente = () => {
 
     useEffect(() => {
         getConfig()
-            .then((cfg) => setGpsWindow({ gpsDesde: cfg.gpsDesde, gpsHasta: cfg.gpsHasta }))
+            .then((cfg) => setGpsWindow({ gpsDesde: cfg.gpsDesde, gpsHasta: cfg.gpsHasta, gpsDias: cfg.gpsDias || DEFAULT_GPS_WINDOW.gpsDias }))
             .catch((err) => console.error('Error cargando horario de rastreo GPS:', err));
     }, []);
 
@@ -96,8 +100,8 @@ const DashboardDocente = () => {
         if (!user) return;
         if (!location.loaded || !location.coordinates.lat || !location.coordinates.lng) return;
 
-        // Fuera del horario configurado no se envía GPS (ahorra batería en el dispositivo).
-        if (!isWithinTimeWindow(gpsWindow.gpsDesde, gpsWindow.gpsHasta)) return;
+        // Fuera del horario/días configurados no se envía GPS (ahorra batería en el dispositivo).
+        if (!isWithinTrackingWindow(gpsWindow.gpsDesde, gpsWindow.gpsHasta, gpsWindow.gpsDias)) return;
 
         const now = Date.now();
         if (now - lastUpdateRef.current < 20000) { // 20s throttle

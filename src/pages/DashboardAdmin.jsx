@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { getZonas, getUsuarios, getRegistros, getLogs, createZona, createUsuario, deleteUsuario, setUsuarioActivo, setZonaActiva, updateZona, createLog, createComunicado, importUsuariosBulk, getHorarios, saveHorarios, updateUsuario, getComunicadosEnviados, downloadBackup, restoreBackup, purgeOldData } from '../lib/api';
+import { getZonas, getUsuarios, getRegistros, getLogs, createZona, createUsuario, deleteUsuario, setUsuarioActivo, setZonaActiva, updateZona, createLog, createComunicado, importUsuariosBulk, getHorarios, saveHorarios, updateUsuario, getComunicadosEnviados, downloadBackup, restoreBackup, purgeOldData, getConfig, updateConfig } from '../lib/api';
 import { QRCodeSVG } from 'qrcode.react';
 import { toPng } from 'html-to-image';
 import Swal from 'sweetalert2';
@@ -1180,6 +1180,88 @@ const DashboardAdmin = () => {
             title: 'Info del Sistema',
             html: '<p><b>App:</b> Vigilancia QR CNY v1.0.0</p>'
         });
+    };
+
+    const configureGpsSchedule = async () => {
+        let current = { gpsDesde: '06:00', gpsHasta: '18:00', gpsDias: [1, 2, 3, 4, 5] };
+        try {
+            const saved = await getConfig();
+            current = { ...current, ...saved };
+        } catch (e) {
+            console.error('Error cargando configuración de GPS:', e);
+        }
+
+        const DIAS = [
+            { n: 1, label: 'Lunes' },
+            { n: 2, label: 'Martes' },
+            { n: 3, label: 'Miércoles' },
+            { n: 4, label: 'Jueves' },
+            { n: 5, label: 'Viernes' },
+            { n: 6, label: 'Sábado' },
+            { n: 7, label: 'Domingo' }
+        ];
+
+        const { value: formValues } = await Swal.fire({
+            title: 'Horario de Rastreo GPS',
+            html: `
+                <div style="text-align: left;">
+                    <p style="font-size:13px; color:#555;">
+                        Fuera de este horario y días, los dispositivos de los docentes no envían su
+                        ubicación en vivo (ahorra batería) y no aparecerán en el mapa de supervisión.
+                    </p>
+                    <label style="font-weight:bold; font-size:13px; color:#555;">Desde:</label>
+                    <input id="swal-gps-desde" type="time" class="swal2-input" value="${current.gpsDesde}">
+
+                    <label style="font-weight:bold; font-size:13px; color:#555;">Hasta:</label>
+                    <input id="swal-gps-hasta" type="time" class="swal2-input" value="${current.gpsHasta}">
+
+                    <label style="font-weight:bold; font-size:13px; color:#555; display:block; margin-top:10px;">Días activos:</label>
+                    <div style="display:flex; flex-wrap:wrap; gap:10px; padding:10px 0;">
+                        ${DIAS.map(({ n, label }) => `
+                            <label style="display:flex; align-items:center; gap:5px; font-size:13px; font-weight:normal;">
+                                <input type="checkbox" id="swal-gps-dia-${n}" ${current.gpsDias.includes(n) ? 'checked' : ''}>
+                                ${label}
+                            </label>
+                        `).join('')}
+                    </div>
+                </div>
+            `,
+            focusConfirm: false,
+            showCancelButton: true,
+            confirmButtonText: 'Guardar',
+            cancelButtonText: 'Cancelar',
+            preConfirm: () => {
+                const gpsDesde = document.getElementById('swal-gps-desde').value;
+                const gpsHasta = document.getElementById('swal-gps-hasta').value;
+                const gpsDias = DIAS
+                    .filter(({ n }) => document.getElementById(`swal-gps-dia-${n}`).checked)
+                    .map(({ n }) => n);
+
+                if (!gpsDesde || !gpsHasta) {
+                    Swal.showValidationMessage('Por favor complete ambos horarios');
+                    return false;
+                }
+                if (gpsDesde >= gpsHasta) {
+                    Swal.showValidationMessage('La hora "Desde" debe ser anterior a la hora "Hasta"');
+                    return false;
+                }
+                if (gpsDias.length === 0) {
+                    Swal.showValidationMessage('Seleccione al menos un día');
+                    return false;
+                }
+                return { gpsDesde, gpsHasta, gpsDias };
+            }
+        });
+
+        if (!formValues) return;
+
+        try {
+            await updateConfig(formValues.gpsDesde, formValues.gpsHasta, formValues.gpsDias);
+            await logAction(`Horario de rastreo GPS actualizado: ${formValues.gpsDesde}-${formValues.gpsHasta}, días ${formValues.gpsDias.join(',')}`);
+            Swal.fire('Guardado', 'El horario de rastreo GPS fue actualizado.', 'success');
+        } catch (e) {
+            Swal.fire('Error', e.message || 'No se pudo actualizar el horario de rastreo GPS', 'error');
+        }
     };
 
     const fetchComunicadosEnviados = async () => {
@@ -3457,6 +3539,9 @@ const DashboardAdmin = () => {
                     </button>
                     <button className="btn btn-orange" onClick={showSecurityPolicies}>
                         <i className="fas fa-shield-alt"></i> Políticas de Seguridad
+                    </button>
+                    <button className="btn btn-institutional" onClick={configureGpsSchedule}>
+                        <i className="fas fa-satellite-dish"></i> Horario de Rastreo GPS
                     </button>
                     <button className="btn btn-green" onClick={runBackup}>
                         <i className="fas fa-download"></i> Backup completo
