@@ -15,7 +15,8 @@ const getTeacherColor = (name) => {
 
 const OPERATIVE_ROLES = ['DOCENTE', 'JEFE DE AREA'];
 const ZONE_RADIUS_M = 10;
-const CAMPUS = { lat: 4.8990, lng: -74.0360 };
+// Colegio Nueva York, Calle 227 #49-64, Bogotá (mismo punto que schoolData.gps).
+const CAMPUS = { lat: 4.8029538364668145, lng: -74.04472357063082 };
 const CAMPUS_ZOOM = 17;
 const CAMPUS_MIN_ZOOM = 15;
 const CAMPUS_MAX_ZOOM = 21;

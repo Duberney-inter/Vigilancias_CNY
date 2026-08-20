@@ -370,7 +370,7 @@ const DashboardDirector = ({ readOnly = false }) => {
                     if (zoneCoords.length > 0) {
                         map.fitBounds(L.latLngBounds(zoneCoords).pad(0.15));
                     } else {
-                        map.setView([4.8990, -74.0360], 17); // Focused on school campus coordinates (Chía)
+                        map.setView([4.8029538364668145, -74.04472357063082], 17); // Colegio Nueva York, Calle 227 #49-64, Bogotá
                     }
                 }
                 shouldFitRef.current = false;
