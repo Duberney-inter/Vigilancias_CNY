@@ -15,6 +15,13 @@ const getTeacherColor = (name) => {
 
 const OPERATIVE_ROLES = ['DOCENTE', 'JEFE DE AREA'];
 const ZONE_RADIUS_M = 10;
+// Si un docente no envía su GPS en este lapso (fuera del horario de rastreo,
+// apagó la ubicación, cerró la app, etc.), deja de considerarse "en vivo" y
+// desaparece del mapa en vez de quedar pegado con su última posición.
+const GPS_FRESH_WINDOW_MS = 2 * 60 * 1000;
+
+const isGpsFresh = (actualizadoGps) =>
+    Boolean(actualizadoGps) && (Date.now() - new Date(actualizadoGps).getTime() < GPS_FRESH_WINDOW_MS);
 // Colegio Nueva York, Calle 227 #49-64, Bogotá (mismo punto que schoolData.gps).
 const CAMPUS = { lat: 4.8029538364668145, lng: -74.04472357063082 };
 const CAMPUS_ZOOM = 17;
@@ -124,6 +131,7 @@ const LiveSupervision = ({
     const [fechaDesde, setFechaDesde] = useState('');
     const [fechaHasta, setFechaHasta] = useState('');
     const [loading, setLoading] = useState(true);
+    const [refreshing, setRefreshing] = useState(false);
 
     const resolveSelectedZone = () => {
         if (selectedMapZone === 'ALL') return null;
@@ -193,6 +201,15 @@ const LiveSupervision = ({
         const interval = setInterval(fetchData, refreshMs);
         return () => clearInterval(interval);
     }, [refreshMs, isLiveMode]);
+
+    const handleManualRefresh = async () => {
+        setRefreshing(true);
+        try {
+            await fetchData();
+        } finally {
+            setRefreshing(false);
+        }
+    };
 
     useEffect(() => {
         setMapTimeframe(isLiveMode ? 'today' : 'all');
@@ -373,7 +390,8 @@ const LiveSupervision = ({
             matchesSelectedRole(getUserRol(u)) &&
             u.latitud_actual && u.longitud_actual &&
             parseFloat(u.latitud_actual) !== 0 &&
-            parseFloat(u.longitud_actual) !== 0
+            parseFloat(u.longitud_actual) !== 0 &&
+            isGpsFresh(u.actualizado_gps)
         );
 
         let filteredLiveTeachers = liveTeachers;
@@ -400,7 +418,7 @@ const LiveSupervision = ({
             const initials = u.nombre
                 ? u.nombre.split(' ').filter(Boolean).map((n) => n[0]).slice(0, 2).join('').toUpperCase()
                 : '??';
-            const isFresh = u.actualizado_gps && (Date.now() - new Date(u.actualizado_gps).getTime() < 15 * 60 * 1000);
+            const isFresh = isGpsFresh(u.actualizado_gps);
             const statusColor = isFresh ? '#2ecc71' : '#95a5a6';
             const statusLabel = isFresh ? 'EN VIVO' : 'ÚLTIMA UBICACIÓN';
             const timeStr = u.actualizado_gps
@@ -480,7 +498,9 @@ const LiveSupervision = ({
     const teachersList = staffUsers;
     const teacherUbicaciones = [];
     teachersList.forEach((t) => {
-        const hasLiveGPS = t.latitud_actual && t.longitud_actual && parseFloat(t.latitud_actual) !== 0 && parseFloat(t.longitud_actual) !== 0;
+        const hasLiveGPS = t.latitud_actual && t.longitud_actual
+            && parseFloat(t.latitud_actual) !== 0 && parseFloat(t.longitud_actual) !== 0
+            && isGpsFresh(t.actualizado_gps);
         const latestScan = registros.find((r) => r.usuarioNombre === t.nombre);
 
         if (selectedZoneFilter) {
@@ -494,7 +514,6 @@ const LiveSupervision = ({
         }
 
         if (hasLiveGPS) {
-            const isFresh = t.actualizado_gps && (Date.now() - new Date(t.actualizado_gps).getTime() < 15 * 60 * 1000);
             teacherUbicaciones.push({
                 id: 'live-' + t.documento,
                 nombre: t.nombre,
@@ -502,8 +521,8 @@ const LiveSupervision = ({
                 longitud: parseFloat(t.longitud_actual),
                 timestamp: t.actualizado_gps,
                 isLive: true,
-                isFresh,
-                labelText: isFresh ? 'Ubicación GPS (Activo)' : 'Ubicación GPS (Inactivo)',
+                isFresh: true,
+                labelText: 'Ubicación GPS (Activo)',
                 timeAgoStr: t.actualizado_gps
                     ? new Date(t.actualizado_gps).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
                     : 'N/A'
@@ -635,10 +654,36 @@ const LiveSupervision = ({
                     <div>
                         <h3 style={{ margin: 0, color: 'var(--color-blue-dark)', fontSize: '16px', fontWeight: 'bold' }}>Mapa del campus y rondas</h3>
                         <small style={{ color: '#64748b', display: 'block', marginTop: '4px' }}>
-                            Círculos de 50 m por zona, visibles aunque no haya escaneos.
+                            Círculos de {ZONE_RADIUS_M} m por zona, visibles aunque no haya escaneos.
                         </small>
                     </div>
-                    <small style={{ color: '#888' }}><i className="fas fa-satellite"></i> Actualización cada {Math.round(refreshMs / 1000)}s</small>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                        <small style={{ color: '#888' }}><i className="fas fa-satellite"></i> Actualización cada {Math.round(refreshMs / 1000)}s</small>
+                        <button
+                            type="button"
+                            onClick={handleManualRefresh}
+                            disabled={refreshing}
+                            title="Refrescar ahora"
+                            style={{
+                                display: 'flex',
+                                alignItems: 'center',
+                                gap: '6px',
+                                padding: '6px 10px',
+                                fontSize: '11px',
+                                fontWeight: 'bold',
+                                borderRadius: '8px',
+                                border: '1px solid #e2e8f0',
+                                background: refreshing ? '#f1f5f9' : '#ffffff',
+                                color: 'var(--color-blue-dark)',
+                                cursor: refreshing ? 'default' : 'pointer',
+                                margin: 0,
+                                width: 'auto'
+                            }}
+                        >
+                            <i className={`fas fa-sync-alt ${refreshing ? 'fa-spin' : ''}`}></i>
+                            {refreshing ? 'Actualizando...' : 'Refrescar'}
+                        </button>
+                    </div>
                     </div>
                     <div className="map-panel-canvas-wrap">
                         <div
